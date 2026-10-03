@@ -1,0 +1,9 @@
+AI Arena - Lite 0.4.142-beta
+
+Changes since 0.4.141-beta:
+
+- Reset a model's context window to Server default without silently restoring a previous legacy limit. Preserve server-selected context settings in LM Studio and Ollama requests.
+- Preserve leading and trailing whitespace in ordinary model responses, streamed partial answers, and continuations so continued words and formatting remain intact.
+- Keep repeated turn retries on a single active private-memory correction chain, including repeated answer text. Preserve eligible memory when forking historical transcripts.
+- Release Models controls after assignment or context-setting save failures. Keep successfully saved settings successful when secondary logging or display refresh fails.
+- Refresh existing transcript cards when compact view, avatars, comparison selection, speech availability, or theme changes. Preserve live card hosts and avoid rebuilding unchanged cards.

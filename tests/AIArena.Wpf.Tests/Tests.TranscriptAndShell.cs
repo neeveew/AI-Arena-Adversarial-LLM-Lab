@@ -1826,19 +1826,20 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
             "transcript actions should own transparent disabled chrome and a palette-aware keyboard focus treatment");
     });
 
-    static IEnumerable<T> LogicalDescendants<T>(DependencyObject root) where T : DependencyObject
-    {
-        foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>())
-        {
-            if (child is T match)
-            {
-                yield return match;
-            }
+}
 
-            foreach (var descendant in LogicalDescendants<T>(child))
-            {
-                yield return descendant;
-            }
+static IEnumerable<T> LogicalDescendants<T>(DependencyObject root) where T : DependencyObject
+{
+    foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>())
+    {
+        if (child is T match)
+        {
+            yield return match;
+        }
+
+        foreach (var descendant in LogicalDescendants<T>(child))
+        {
+            yield return descendant;
         }
     }
 }
@@ -5558,6 +5559,183 @@ static void IdlePollingCadenceOnlyWhenNothingIsRunning()
     Require(!MainWindow.ShouldUseIdlePollingCadence(windowActive: true, arenaBusy: false, autoChatRunning: false), "a focused shell should keep the responsive cadence");
     Require(!MainWindow.ShouldUseIdlePollingCadence(windowActive: false, arenaBusy: true, autoChatRunning: false), "a background run must not lose its refresh cadence");
     Require(!MainWindow.ShouldUseIdlePollingCadence(windowActive: false, arenaBusy: false, autoChatRunning: true), "auto chat in the background must not lose its refresh cadence");
+}
+
+static void TranscriptRealizedCardsRefreshPresentationWithoutReplacingStreamHost()
+{
+    RunStaTest(() =>
+    {
+        var preferences = new WpfSettings { ShowAutoModerator = false, AvatarStyle = "procedural" };
+        var message = TranscriptForTest(7, "Alpha", "alpha", "dialogue", "ok") with
+        {
+            Text = "Saved response", CreatedAt = 84, InternetTool = "search", InternetQuery = "source",
+            Model = "model-A", VoiceStyle = "bark-only", CompletionTokens = 6
+        };
+        var snapshot = SnapshotForOverviewTest(true, "model-A", "", 7, [message], []) with
+        {
+            SessionId = "presentation-session", SessionInstanceId = "presentation-instance"
+        };
+        var list = new TranscriptListBox { HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        var window = new Window
+        {
+            Content = list, Width = 1100, Height = 900, Left = -10000, Top = -10000,
+            WindowStyle = WindowStyle.None, ShowInTaskbar = false, ShowActivated = false
+        };
+        AttachArenaPresentationResources(window);
+        var bodyBrush = new SolidColorBrush(Colors.MidnightBlue);
+        var persona = "persona";
+        var canSpeak = false;
+        Brush BrushFor(string key) => key == "TranscriptBodyBrush" ? bodyBrush
+            : window.TryFindResource(key) as Brush ?? AccentResourceBrush(key);
+        bool IsAgent(string id) => id == "alpha";
+        TranscriptListCoordinator coordinator = null!;
+        void Refresh() => coordinator.Populate(snapshot.Messages);
+        var insight = new TranscriptInsightCoordinator(Refresh, () => { });
+        var actions = new TranscriptActionCoordinator(() => preferences.CompactTranscriptMode, () => false, BrushFor);
+        var renderer = new TranscriptCardRenderer(
+            () => preferences.CompactTranscriptMode, actions, BrushFor, ShellUiHelpers.BlendBrush,
+            _ => BrushFor("AlphaAccentBrush"), _ => persona, () => TranscriptViewCoordinator.CurrentAvatarStyle(preferences),
+            () => preferences.ChampionAvatars, () => preferences.SystemEventGlyphs, () => preferences.ShowStyleFit && preferences.AllowDebugControls,
+            (_, _) => new VoiceAdherenceDiagnostic("", "", "", 0, "", [], []),
+            FormatTranscriptDurationForTest, FormatTranscriptNumberForTest, _ => { },
+            _ => Task.CompletedTask, _ => Task.CompletedTask, _ => Task.CompletedTask, _ => { }, IsAgent,
+            () => preferences.TurnCompareMode, insight.IsTurnSelectedForCompare, TranscriptInsightCoordinator.CanCompareMessage,
+            insight.ToggleTurnCompareMessage, canSpeakTranscriptMessage: _ => canSpeak, showInternetDetails: () => preferences.AllowDebugControls && preferences.ShowTranscriptInternetDetails);
+        using var search = new TranscriptSearchCoordinator(window, window.Dispatcher, new Popup(), new Button(),
+            new TextBox(), new Button(), new Border(), new StackPanel(), new TextBlock(), new ComboBox(),
+            new CheckBox { IsChecked = true }, new CheckBox { IsChecked = true },
+            new CheckBox { IsChecked = true }, new CheckBox { IsChecked = true },
+            () => false, BrushFor, IsAgent, () => null, Refresh);
+        var adjunct = new TranscriptAdjunctCoordinator(
+            new DiscourseDiagnosticsService(), new VoiceStyleAdherenceService(), renderer,
+            () => preferences.CompactTranscriptMode, () => new Dictionary<string, string>(),
+            () => insight.SelectedTurnCompareMessages, () => insight.HasTurnCompareSelection,
+            BrushFor, ShellUiHelpers.BlendBrush, _ => BrushFor("AlphaAccentBrush"), IsAgent, value => value,
+            () => false, _ => BrushFor("AlphaAccentBrush"), FormatTranscriptNumberForTest, FormatTranscriptDurationForTest,
+            renderer.CreateActionButton, Refresh, insight.ReselectLatest, () => insight.ClearTurnCompareSelection(true, true),
+            () => Task.CompletedTask);
+        coordinator = new TranscriptListCoordinator(window.Dispatcher, list, new CheckBox { IsChecked = false },
+            new ShellCardFactory(BrushFor, ShellUiHelpers.BlendBrush), actions, search, insight, renderer,
+            adjunct, null!, null!, () => preferences, () => snapshot, _ => { }, () => false, _ => { },
+            () => false, IsAgent, BrushFor, _ => BrushFor("AlphaAccentBrush"), value => value, value => value,
+            () => Task.CompletedTask, () => { }, () => { }, () => { });
+        try
+        {
+            Refresh();
+            window.Show();
+            var expanded = RealizedCard();
+            Require(LogicalDescendants<AgentAvatarControl>(expanded).Single().AvatarStyle == "procedural",
+                "the initial saved transcript card must realize its avatar");
+            Refresh();
+            Require(ReferenceEquals(RealizedCard(), expanded), "unchanged presentation must retain the realized card");
+
+            preferences.CompactTranscriptMode = true;
+            Refresh();
+            var compact = RealizedCard();
+            Require(!ReferenceEquals(compact, expanded) && !LogicalDescendants<AgentAvatarControl>(compact).Any(),
+                "compact preference must immediately rebuild the same-message realized card without its avatar");
+            preferences.CompactTranscriptMode = false;
+            Refresh();
+            Require(LogicalDescendants<AgentAvatarControl>(RealizedCard()).Single().AvatarStyle == "procedural",
+                "disabling compact must restore the current avatar on the same message");
+            preferences.AvatarStyle = "initials";
+            preferences.ChampionAvatars = false;
+            Refresh();
+            Require(LogicalDescendants<AgentAvatarControl>(RealizedCard()).Single().AvatarStyle == "initials",
+                "avatar preference must refresh the same-message realized card");
+
+            persona = "updated persona";
+            Refresh();
+            Require(LogicalDescendants<AgentAvatarControl>(RealizedCard()).Single().Persona == persona,
+                "a changed speaker persona must refresh the existing avatar");
+            canSpeak = true;
+            Refresh();
+            Require(DescendantButtons(RealizedCard()).Single(button => AutomationProperties.GetName(button) == "Speak").IsEnabled,
+                "changed speech availability must refresh the existing Speak action");
+            var beforePalette = RealizedCard();
+            var backgroundBefore = ((SolidColorBrush)beforePalette.Background).Color;
+            bodyBrush.Color = Colors.DarkGreen;
+            Refresh();
+            Require(!ReferenceEquals(RealizedCard(), beforePalette)
+                    && ((SolidColorBrush)RealizedCard().Background).Color != backgroundBefore,
+                "changed palette values must refresh blended card colors even when the theme preference is unchanged");
+
+            preferences.TurnCompareMode = true;
+            insight.SetTurnCompareMode(true);
+            Refresh();
+            Require(HasAction(RealizedCard(), "Drop compare"), "enabling compare must add the selected compare action");
+            insight.ToggleTurnCompareMessage(message);
+            Require(HasAction(RealizedCard(), "Compare") && !HasAction(RealizedCard(), "Drop compare"),
+                "changing comparison selection must update the existing card's action state");
+            preferences.TurnCompareMode = false;
+            insight.SetTurnCompareMode(false);
+            Refresh();
+            Require(!HasAction(RealizedCard(), "Compare") && !HasAction(RealizedCard(), "Drop compare"),
+                "disabling compare must remove the existing card's comparison action");
+            preferences.AllowDebugControls = true;
+            preferences.ShowTranscriptInternetDetails = true;
+            Refresh();
+            Require(LogicalDescendants<Expander>(RealizedCard()).Any(item => item.Header?.ToString() == "Internet details"),
+                "internet detail preferences must refresh the existing card");
+            preferences.ShowStyleFit = true;
+            Refresh();
+            Require(LogicalDescendants<FrameworkElement>(RealizedCard()).Any(element =>
+                    AutomationProperties.GetHelpText(element).Contains("Style fit:", StringComparison.Ordinal)),
+                "enabling style diagnostics must refresh existing telemetry details");
+            preferences.AllowDebugControls = false;
+            Refresh();
+            Require(!LogicalDescendants<Expander>(RealizedCard()).Any(item => item.Header?.ToString() == "Internet details"),
+                "turning debug controls off must remove existing internet details");
+            Require(!LogicalDescendants<FrameworkElement>(RealizedCard()).Any(element =>
+                    AutomationProperties.GetHelpText(element).Contains("Style fit:", StringComparison.Ordinal)),
+                "disabling debug controls must refresh derived style-diagnostic visibility");
+
+            using var operation = coordinator.Streams.Begin();
+            var started = new ArenaTurnProgress(snapshot.SessionId, snapshot.SessionInstanceId, "presentation-op", "attempt-1",
+                message.SpeakerId, message.Speaker, message.Model, message.Turn, ArenaTurnProgressKind.Started);
+            operation.Report(started);
+            operation.Report(started with { Kind = ArenaTurnProgressKind.Delta, Text = "Live response" });
+            operation.Flush();
+            var host = list.Items.OfType<ContentControl>().Single();
+            var live = host.Content;
+            preferences.CompactTranscriptMode = true;
+            Refresh();
+            Require(ReferenceEquals(list.Items.OfType<ContentControl>().Single(), host) && ReferenceEquals(host.Content, live),
+                "presentation refresh must not replace a live streaming card or discard its buffered text");
+            operation.Report(started with { Kind = ArenaTurnProgressKind.Completed, Text = message.Text, Status = "ok", CreatedAt = message.CreatedAt });
+            operation.Flush();
+            Require(ReferenceEquals(list.Items.OfType<ContentControl>().Single(), host)
+                    && !LogicalDescendants<AgentAvatarControl>(RealizedCard()).Any(),
+                "stream commit must honor current compact presentation while preserving the row host");
+            var committed = host.Content;
+            preferences.CompactTranscriptMode = false;
+            Refresh();
+            Require(ReferenceEquals(list.Items.OfType<ContentControl>().Single(), host)
+                    && !ReferenceEquals(host.Content, committed)
+                    && LogicalDescendants<AgentAvatarControl>(RealizedCard()).Any(),
+                "completed streaming cards must refresh presentation inside the same host");
+            var updated = host.Content;
+            Refresh();
+            Require(ReferenceEquals(host.Content, updated), "unchanged completed streaming presentation must not rebuild content");
+        }
+        finally
+        {
+            coordinator.Streams.Clear();
+            window.Close();
+        }
+
+        Border RealizedCard()
+        {
+            window.UpdateLayout();
+            var index = list.Items.Count - 1;
+            var container = list.ItemContainerGenerator.ContainerFromIndex(index) as ListBoxItem
+                ?? throw new InvalidOperationException("transcript card was not realized");
+            return (container.Content is ContentControl host ? host.Content : container.Content) as Border
+                ?? throw new InvalidOperationException("realized transcript row has no card");
+        }
+        static bool HasAction(Border card, string label) =>
+            DescendantButtons(card).Any(button => AutomationProperties.GetName(button) == label);
+    });
 }
 
 static void TranscriptRowSyncPreservesUnchangedTail()

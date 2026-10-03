@@ -95,6 +95,146 @@ internal static class MemoryForkTests
         Require(!prompt.Contains("FOREIGN_BRANCH_MEMORY", StringComparison.Ordinal), "foreign-branch memory leaked");
         Require(!beta.PrivateNotes.Contains("INCORRECT_OLD_MEMORY") && !beta.PrivateNotes.Contains("EXPIRED_BETA_MEMORY"),
             "legacy mirror reintroduced inactive memory");
+
+        RetryMemoryKeepsOnlyLatestCorrection();
+        RetryAfterLegacyRetirementCycleCreatesANewCurrentValue();
+    }
+
+    private static void RetryAfterLegacyRetirementCycleCreatesANewCurrentValue()
+    {
+        WithTempRoot(root =>
+        {
+            var store = new SessionStore(root);
+            var snapshot = SessionStore.CreateDefaultSnapshot();
+            var agent = snapshot.Engine.Agents[0];
+            snapshot.Engine.Messages.Add(new DialogueMessage
+            {
+                MessageId = "message:source-2", Turn = 2, SpeakerId = "alpha", Text = "A", CreatedAt = 200
+            });
+            // The old content-derived identity reused A and erased its first record,
+            // leaving both retained entries retired. Their missing history is unknown.
+            agent.MemoryEntries.Add(Entry("memory:legacy-b", "Turn 2: B",
+                DateTimeOffset.FromUnixTimeSeconds(201), sourceTurn: 2, correctionOf: "memory:legacy-a"));
+            agent.MemoryEntries.Add(Entry("memory:legacy-a", "Turn 2: A",
+                DateTimeOffset.FromUnixTimeSeconds(202), sourceTurn: 2, correctionOf: "memory:legacy-b"));
+            store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+            snapshot = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+            agent = snapshot.Engine.Agents[0];
+            var legacyEvidence = agent.MemoryEntries.Select(entry => JsonSerializer.Serialize(entry)).ToArray();
+            Require(StructuredMemoryService.SelectForPrompt(snapshot, agent, DateTimeOffset.UtcNow).Count == 0,
+                "legacy cycle fixture unexpectedly has an active value");
+
+            TurnRunnerService.UpdatePrivateMemory(snapshot, agent, snapshot.Engine.Messages[0]);
+            var current = StructuredMemoryService.SelectForPrompt(snapshot, agent, DateTimeOffset.UtcNow);
+            Require(current.Count == 1 && current[0].Text == "Turn 2: A"
+                && current[0].MemoryId is not "memory:legacy-a" and not "memory:legacy-b"
+                && current[0].SupersedesMemoryId == "memory:legacy-a",
+                "retry after a legacy cycle must create a distinct current correction even when its text repeats");
+            Require(agent.MemoryEntries.Take(2).Select(entry => JsonSerializer.Serialize(entry)).SequenceEqual(legacyEvidence),
+                "retry rewrote ambiguous legacy provenance");
+            Require(agent.MemoryEntries.Select(entry => entry.MemoryId).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 3,
+                "retry after a legacy cycle introduced duplicate identities");
+            var currentId = current[0].MemoryId;
+            TurnRunnerService.UpdatePrivateMemory(snapshot, agent, snapshot.Engine.Messages[0]);
+            Require(agent.MemoryEntries.Count == 3, "identical retry of the new active value should remain idempotent");
+            store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+            snapshot = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+            agent = snapshot.Engine.Agents[0];
+            current = StructuredMemoryService.SelectForPrompt(snapshot, agent, DateTimeOffset.UtcNow);
+            Require(current.Count == 1 && current[0].MemoryId == currentId
+                && agent.MemoryEntries.Take(2).Select(entry => JsonSerializer.Serialize(entry)).SequenceEqual(legacyEvidence),
+                "persistence changed the recovered current value or legacy retirement evidence");
+        });
+    }
+
+    private static void RetryMemoryKeepsOnlyLatestCorrection()
+    {
+        WithTempRoot(root =>
+        {
+            var store = new SessionStore(root);
+            var transcript = new TranscriptService();
+            foreach (var usePreservedTimestamp in new[] { true, false })
+            foreach (var values in new[] { new[] { "A", "B", "C" }, new[] { "A", "B", "A" } })
+            {
+                var sessionId = $"correction-{usePreservedTimestamp}-{values[^1]}".ToLowerInvariant();
+                var snapshot = SessionStore.CreateDefaultSnapshot();
+                snapshot.Engine.Messages.Add(new DialogueMessage
+                {
+                    MessageId = "message:before", Turn = 1, SpeakerId = "operator", Text = "Before", CreatedAt = 100
+                });
+                snapshot.Engine.Messages.Add(new DialogueMessage
+                {
+                    MessageId = "message:retry", Turn = 2, SpeakerId = "alpha", Text = "Original", CreatedAt = 200
+                });
+                snapshot.Engine.Messages.Add(new DialogueMessage
+                {
+                    MessageId = "message:after", Turn = 3, SpeakerId = "beta", Text = "After", CreatedAt = 300
+                });
+                snapshot.Engine.TurnCount = 3;
+                var correctionIds = new List<string>();
+                for (var index = 0; index < values.Length; index++)
+                {
+                    var agent = snapshot.Engine.Agents[0];
+                    var completion = new ModelCompletionResult(
+                        true, "", "test-model", values[index], "", 0, 0, 0, 0, "", DateTimeOffset.UtcNow);
+                    var replacement = transcript.CreateAssistantReplacement(
+                        snapshot.Engine.Messages[1], agent, values[index], completion);
+                    snapshot.Engine.Messages[1] = replacement;
+                    if (usePreservedTimestamp)
+                    {
+                        // Real retries preserve the original transcript timestamp on every replacement.
+                        TurnRunnerService.UpdatePrivateMemory(snapshot, agent, replacement);
+                    }
+                    else
+                    {
+                        StructuredMemoryService.AddTurnMemory(snapshot, agent, replacement,
+                            $"Turn 2: {values[index]}", DateTimeOffset.FromUnixTimeSeconds(200 + index));
+                    }
+
+                    var expectedText = $"Turn 2: {values[index]}";
+                    var selected = StructuredMemoryService.SelectForPrompt(snapshot, agent, DateTimeOffset.UtcNow);
+                    Require(selected.Count == 1 && selected[0].Text == expectedText,
+                        $"{sessionId} retry {index}: only the latest correction should be eligible for prompts");
+                    var latest = selected[0];
+                    Require(!correctionIds.Contains(latest.MemoryId), "returning to older text reused its retired identity");
+                    Require(latest.SourceMessageId == "message:retry" && latest.SourceTurn == 2,
+                        "a correction lost its original transcript provenance");
+                    Require(latest.SupersedesMemoryId == (correctionIds.LastOrDefault() ?? "")
+                        && latest.CorrectionOfMemoryId == latest.SupersedesMemoryId,
+                        "a correction must retire the current value rather than an earlier ancestor");
+                    correctionIds.Add(latest.MemoryId);
+                    Require(agent.MemoryEntries.Count == correctionIds.Count,
+                        "a correction erased its earlier provenance instead of retaining the chain");
+                    Require(agent.PrivateNotes.SequenceEqual([expectedText]), "legacy mirror retained a superseded correction");
+                    Require(StructuredMemoryService.SelectForPrompt(snapshot, agent, DateTimeOffset.UtcNow, beforeTurn: 2).Count == 0,
+                        "a retry included its own correction in historical prompt context");
+
+                    store.SaveSnapshotAsync(snapshot, sessionId).GetAwaiter().GetResult();
+                    snapshot = store.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()!;
+                    agent = snapshot.Engine.Agents[0];
+                    var reloaded = StructuredMemoryService.SelectForPrompt(snapshot, agent, DateTimeOffset.UtcNow);
+                    Require(reloaded.Count == 1 && reloaded[0].MemoryId == latest.MemoryId
+                        && reloaded[0].Text == expectedText && agent.MemoryEntries.Count == correctionIds.Count,
+                        "persistence changed the active correction or lost its causal history");
+                }
+
+                var before = store.ForkSessionAtCursorAsync(sessionId, "message:before", sessionId + "-before")
+                    .GetAwaiter().GetResult();
+                var beforeSnapshot = store.LoadSnapshotAsync(before.TargetSessionId).GetAwaiter().GetResult()!;
+                Require(beforeSnapshot.Engine.Agents[0].MemoryEntries.Count == 0,
+                    "retry memory leaked into a fork before its source turn");
+                var atSource = store.ForkSessionAtCursorAsync(sessionId, "message:retry", sessionId + "-source")
+                    .GetAwaiter().GetResult();
+                var forkSnapshot = store.LoadSnapshotAsync(atSource.TargetSessionId).GetAwaiter().GetResult()!;
+                var forkMemory = StructuredMemoryService.SelectForPrompt(
+                    forkSnapshot, forkSnapshot.Engine.Agents[0], DateTimeOffset.UtcNow);
+                // A later recorded mutation is excluded at the historical cursor; equal-time
+                // transcript retries retain the current replacement and its correction chain.
+                var expectedForkIndex = usePreservedTimestamp ? values.Length - 1 : 0;
+                Require(forkMemory.Count == 1 && forkMemory[0].MemoryId == correctionIds[expectedForkIndex],
+                    $"{sessionId}: historical fork lost the correction valid at its source cursor");
+            }
+        });
     }
 
     internal static void BoundsStructuredMemoryAndLegacyMirror()

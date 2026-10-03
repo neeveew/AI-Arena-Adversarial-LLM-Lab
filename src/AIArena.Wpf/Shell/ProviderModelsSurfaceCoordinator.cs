@@ -372,6 +372,13 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             CancelStatus(statusReceipt, "Assignment save was cancelled.");
             throw;
         }
+        catch (Exception exception)
+        {
+            var error = AppErrorPresenter.Present(exception, AppErrorContext.Provider);
+            control.SetAssignmentState(change.ChangeId, ProviderAssignmentSaveState.Failed, error.DisplayText);
+            FailStatus(statusReceipt, "Assignment was not saved.", error.DisplayText);
+            throw;
+        }
 
         control.SetAssignmentState(
             change.ChangeId,
@@ -456,6 +463,13 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 ProviderModelConfigurationSaveState.Failed,
                 "Model configuration save was cancelled.");
             CancelStatus(statusReceipt, "Model configuration save was cancelled.");
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var error = AppErrorPresenter.Present(exception, AppErrorContext.Provider);
+            control.SetConfigurationState(change.ChangeId, ProviderModelConfigurationSaveState.Failed, error.DisplayText);
+            FailStatus(statusReceipt, "Model configuration was not saved.", error.DisplayText);
             throw;
         }
 

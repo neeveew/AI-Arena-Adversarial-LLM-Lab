@@ -401,7 +401,9 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                 var telemetry = retryLlamaCppTransientFailures
                     ? ExtractLlamaCppTelemetry(completionRoot)
                     : new ModelProviderTelemetry(0, 0, "");
-                var text = ExtractAssistantContent(completionRoot).Trim();
+                // Do not trim public text: leading whitespace can join a
+                // continuation, and trailing whitespace can carry formatting.
+                var text = ExtractAssistantContent(completionRoot);
                 var reasoning = ExtractReasoning(completionRoot).Trim();
                 var responseModel = FirstString(completionRoot, "model");
                 var completed = new ModelCompletionResult(
@@ -557,7 +559,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
         var completionRoot = completionDocument.RootElement;
         var usage = ExtractNativeUsage(completionRoot);
         var telemetry = ExtractNativeTelemetry(completionRoot);
-        var text = ExtractNativeOutputText(completionRoot, "message").Trim();
+        var text = ExtractNativeOutputText(completionRoot, "message");
         return new ModelCompletionResult(
             !string.IsNullOrWhiteSpace(text),
             baseUrl,
@@ -807,7 +809,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                 {
                     var partialText = !string.IsNullOrWhiteSpace(terminalResult?.Text)
                         ? terminalResult.Text
-                        : content.ToString().Trim();
+                        : content.ToString();
                     var partialReasoning = !string.IsNullOrWhiteSpace(terminalResult?.Reasoning)
                         ? terminalResult.Reasoning
                         : reasoning.ToString().Trim();
@@ -836,7 +838,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                 {
                     var partialText = !string.IsNullOrWhiteSpace(terminalResult?.Text)
                         ? terminalResult.Text
-                        : content.ToString().Trim();
+                        : content.ToString();
                     var partialReasoning = !string.IsNullOrWhiteSpace(terminalResult?.Reasoning)
                         ? terminalResult.Reasoning
                         : reasoning.ToString().Trim();
@@ -863,8 +865,8 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
 
                 if (terminalResult is not null)
                 {
-                    var streamedText = content.ToString().Trim();
-                    if (streamedText.Length > 0
+                    var streamedText = content.ToString();
+                    if (!string.IsNullOrWhiteSpace(streamedText)
                         && !string.Equals(streamedText, terminalResult.Text, StringComparison.Ordinal))
                     {
                         // Accepted public output is never an empty-answer
@@ -886,7 +888,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                         terminalResult.Ok ? "succeeded" : "empty_response");
                 }
 
-                var partialContent = content.ToString().Trim();
+                var partialContent = content.ToString();
                 var incomplete = new ModelCompletionResult(
                     false,
                     baseUrl,
@@ -953,7 +955,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                     false,
                     baseUrl,
                     model,
-                    acceptedContent?.ToString().Trim() ?? "",
+                    acceptedContent?.ToString() ?? "",
                     acceptedReasoning?.ToString().Trim() ?? "",
                     (int)watch.ElapsedMilliseconds,
                     0,
@@ -1197,7 +1199,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                 }
 
                 watch.Stop();
-                var streamedContent = content.ToString().Trim();
+                var streamedContent = content.ToString();
                 var streamedReasoning = reasoning.ToString().Trim();
                 if (!string.IsNullOrWhiteSpace(streamError))
                 {
@@ -1481,7 +1483,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                 false,
                 baseUrl,
                 model,
-                acceptedContent?.ToString().Trim() ?? "",
+                acceptedContent?.ToString() ?? "",
                 acceptedReasoning?.ToString().Trim() ?? "",
                 (int)watch.ElapsedMilliseconds,
                 0,
@@ -1508,7 +1510,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
     {
         var usage = ExtractOllamaUsage(root);
         var telemetry = ExtractOllamaTelemetry(root);
-        var text = (content ?? ExtractOllamaChatContent(root)).Trim();
+        var text = content ?? ExtractOllamaChatContent(root);
         return new ModelCompletionResult(
             !string.IsNullOrWhiteSpace(text),
             baseUrl,
@@ -1637,7 +1639,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
             false,
             baseUrl,
             model,
-            content.ToString().Trim(),
+            content.ToString(),
             reasoning.ToString().Trim(),
             (int)watch.ElapsedMilliseconds,
             0,
@@ -2779,7 +2781,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
             false,
             baseUrl,
             model,
-            content.ToString().Trim(),
+            content.ToString(),
             reasoning?.ToString().Trim() ?? "",
             latencyMs,
             0,
@@ -2804,7 +2806,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
             false,
             baseUrl,
             string.IsNullOrWhiteSpace(responseModel) ? fallbackModel : responseModel,
-            content.ToString().Trim(),
+            content.ToString(),
             reasoning?.ToString().Trim() ?? "",
             latencyMs,
             usage.PromptTokens,

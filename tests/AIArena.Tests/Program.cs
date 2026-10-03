@@ -28,6 +28,9 @@ if (args.Length > 0 && args[0].Equals("--abandon-experiment-definition", StringC
 
 var tests = new List<(string Name, Action Test)>
 {
+    ("provider output preserves public whitespace across transports", ProviderReasoningOutcomeTests.PreservesPublicWhitespaceAcrossTransports),
+    ("provider output preserves public whitespace across stream failures", ProviderReasoningOutcomeTests.PreservesPublicWhitespaceAcrossStreamFailures),
+    ("provider output continuation preserves whitespace through real client", ProviderReasoningOutcomeTests.ContinuationPreservesWhitespaceThroughRealProviderClient),
     ("provider reasoning KeepsReportedStopOnAcceptedTransportFailure", ProviderReasoningOutcomeTests.KeepsReportedStopOnAcceptedTransportFailure),
     ("context recovery ReasoningOnlyFactoryRetryPreservesExactConversation", ArenaTurnStreamingTests.ReasoningOnlyFactoryRetryPreservesExactConversation),
     ("context recovery ReasoningOnlyRecoveryHonorsCapabilitiesAndTerminalFailures", ArenaTurnStreamingTests.ReasoningOnlyRecoveryHonorsCapabilitiesAndTerminalFailures),

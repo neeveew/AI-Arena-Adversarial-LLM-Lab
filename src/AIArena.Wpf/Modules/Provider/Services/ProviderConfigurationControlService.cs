@@ -262,6 +262,7 @@ internal sealed class ProviderConfigurationControlService
         }
 
         IReadOnlyList<string> changedFields = [];
+        var evidenceWarning = "";
         var savedProjection = ProviderModelAssignmentProjection.Empty(
             ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model));
         await arenaOperationLock.WaitAsync(cancellationToken);
@@ -416,7 +417,8 @@ internal sealed class ProviderConfigurationControlService
                     savedProjection = ProviderModelAssignmentProjectionService
                         .CreateBatch(session.Id, snapshot)
                         .Project(request.Model, equivalentModels, sourceConfig);
-                    await eventLogStore.AppendAsync(session.Id, "provider_model_assignment_changed", new
+                    var evidence = await AppPostCommitEvidence.TryAppendAsync(
+                        eventLogStore, session.Id, "provider_model_assignment_changed", new
                     {
                         TargetId = target.Id,
                         target.IsDefault,
@@ -424,7 +426,8 @@ internal sealed class ProviderConfigurationControlService
                         request.Assigned,
                         Model = ProviderModelCatalogProjectionService.SafeModelIdentifier(requestedModel),
                         ChangedFields = changedFields
-                    }, cancellationToken);
+                    }, AppErrorContext.Provider);
+                    evidenceWarning = evidence.Warning;
                     break;
                 }
                 catch (SnapshotConcurrencyException) when (attempt == 0)
@@ -458,13 +461,20 @@ internal sealed class ProviderConfigurationControlService
                         && target.InheritsDefault)
                         ? "Agent now uses the default model."
                         : "Agent is now unassigned.";
-        await refreshHostAsync(message, false, cancellationToken);
-        var refreshedSnapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
-        var refreshedProjection = refreshedSnapshot is null
-            ? savedProjection
-            : ProviderModelAssignmentProjectionService
-                .CreateBatch(session.Id, refreshedSnapshot)
-                .Project(request.Model, request.EquivalentModelIds, sourceConfig);
+        message = AppPostCommitEvidence.AppendWarning(message, evidenceWarning);
+        var refreshedProjection = savedProjection;
+        var refreshWarning = await AppPostCommitEvidence.TryCompleteAsync(async () =>
+        {
+            await refreshHostAsync(message, false, CancellationToken.None);
+            var refreshedSnapshot = await sessionStore.LoadSnapshotAsync(session.Id, CancellationToken.None);
+            if (refreshedSnapshot is not null)
+            {
+                refreshedProjection = ProviderModelAssignmentProjectionService
+                    .CreateBatch(session.Id, refreshedSnapshot)
+                    .Project(request.Model, request.EquivalentModelIds, sourceConfig);
+            }
+        }, "the model assignment display could not be refreshed", AppErrorContext.Provider);
+        message = AppPostCommitEvidence.AppendWarning(message, refreshWarning);
         return new ProviderModelAssignmentControlResult(
             true,
             "",
@@ -506,6 +516,7 @@ internal sealed class ProviderConfigurationControlService
         }
 
         IReadOnlyList<string> changedFields = [];
+        var evidenceWarning = "";
         var saved = ProviderModelConfigurationProjection.Empty(
             ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model));
         await arenaOperationLock.WaitAsync(cancellationToken);
@@ -606,7 +617,8 @@ internal sealed class ProviderConfigurationControlService
                 {
                     await sessionStore.SaveSnapshotAsync(snapshot, session.Id, cancellationToken);
                     saved = CaptureModelConfiguration(session.Id, snapshot, request.Model, aliases, sourceConfig);
-                    await eventLogStore.AppendAsync(session.Id, "provider_model_configuration_changed", new
+                    var evidence = await AppPostCommitEvidence.TryAppendAsync(
+                        eventLogStore, session.Id, "provider_model_configuration_changed", new
                     {
                         Model = ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model),
                         ChangedFields = changedFields,
@@ -614,7 +626,8 @@ internal sealed class ProviderConfigurationControlService
                         ConfiguredContextWindow = request.ConfiguredContextWindow,
                         HistoryPolicy = normalizedHistory,
                         ResponseTone = normalizedTone
-                    }, cancellationToken);
+                    }, AppErrorContext.Provider);
+                    evidenceWarning = evidence.Warning;
                     break;
                 }
                 catch (SnapshotConcurrencyException) when (attempt == 0)
@@ -638,8 +651,14 @@ internal sealed class ProviderConfigurationControlService
         var message = changedFields.Count == 0
             ? "Model configuration already matched the requested values."
             : "Model configuration saved. Routing and model residency were unchanged.";
-        await refreshHostAsync(message, false, cancellationToken);
-        var refreshed = await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken, sourceConfig);
+        message = AppPostCommitEvidence.AppendWarning(message, evidenceWarning);
+        var refreshed = saved;
+        var refreshWarning = await AppPostCommitEvidence.TryCompleteAsync(async () =>
+        {
+            await refreshHostAsync(message, false, CancellationToken.None);
+            refreshed = await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, CancellationToken.None, sourceConfig);
+        }, "the model configuration display could not be refreshed", AppErrorContext.Provider);
+        message = AppPostCommitEvidence.AppendWarning(message, refreshWarning);
         return new ProviderModelConfigurationControlResult(
             true,
             "",

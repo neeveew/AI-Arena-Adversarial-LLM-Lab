@@ -133,6 +133,43 @@ internal sealed class TranscriptCardRenderer
         this.openOutputSettingsAsync = openOutputSettingsAsync;
     }
 
+    // These values are captured by generated cards, rather than bound. The list
+    // captures the shared state once per refresh and adds only speaker/action
+    // state per row, so equal refreshes keep their realized visual trees.
+    internal readonly record struct BrushAppearance(Color Color, double Opacity, Brush? Other)
+    {
+        internal static BrushAppearance Capture(Brush brush) => brush is SolidColorBrush solid
+            ? new(solid.Color, solid.Opacity, null)
+            : new(default, brush.Opacity, brush);
+    }
+
+    internal sealed record PresentationState(
+        bool Compact, string AvatarStyle, bool ChampionAvatars, bool SystemGlyphs,
+        bool StyleFit, bool InternetDetails, bool TurnCompare,
+        BrushAppearance Text, BrushAppearance MutedText, BrushAppearance Body,
+        BrushAppearance Header, BrushAppearance Input, BrushAppearance Border,
+        BrushAppearance Assist, BrushAppearance Primary, BrushAppearance Danger,
+        BrushAppearance DangerBorder, BrushAppearance DangerText, BrushAppearance Warning);
+
+    internal readonly record struct MessagePresentationState(
+        string Persona, bool CanSpeak, bool IsAgent, bool CanCompare, bool SelectedForCompare, BrushAppearance Accent);
+
+    internal PresentationState CapturePresentationState() => new(
+        compactTranscriptMode(), currentAvatarStyle(), useChampionPortrait(), useSystemGlyph(),
+        shouldShowStyleFit(), showInternetDetails(), turnCompareMode(),
+        PaletteBrush("TextBrush"), PaletteBrush("MutedTextBrush"), PaletteBrush("TranscriptBodyBrush"),
+        PaletteBrush("TranscriptHeaderBrush"), PaletteBrush("InputBrush"), PaletteBrush("ControlBorderBrush"),
+        PaletteBrush("AssistBorderBrush"), PaletteBrush("PrimaryBorderBrush"), PaletteBrush("DangerBrush"),
+        PaletteBrush("DangerBorderBrush"), PaletteBrush("DangerTextBrush"), PaletteBrush("Arena.Brush.Warning"));
+
+    internal MessagePresentationState CaptureMessagePresentationState(TranscriptMessage message, PresentationState presentation) => new(
+        personaForSpeaker(message.SpeakerId), canSpeakTranscriptMessage(message), isAgentSpeaker(message.SpeakerId),
+        presentation.TurnCompare && canCompareMessage(message),
+        presentation.TurnCompare && isSelectedForCompare(message),
+        BrushAppearance.Capture(accentForSpeaker(message.SpeakerId)));
+
+    private BrushAppearance PaletteBrush(string key) => BrushAppearance.Capture(resourceBrush(key));
+
     internal sealed record LiveCard(Border Element, TextBlock Body, TextBlock Status);
 
     internal LiveCard CreateLiveCard(TranscriptMessage message)

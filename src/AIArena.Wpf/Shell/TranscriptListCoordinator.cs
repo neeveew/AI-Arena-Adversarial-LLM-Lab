@@ -34,7 +34,9 @@ internal sealed class TranscriptListCoordinator
 
     private sealed record AdjunctRow(UIElement Element);
 
-    private sealed record CardRow(TranscriptMessage Message, bool Retryable, bool SearchMatch, bool IsLatest);
+    private sealed record CardRow(TranscriptMessage Message, bool Retryable, bool SearchMatch, bool IsLatest,
+        TranscriptCardRenderer.PresentationState Presentation,
+        TranscriptCardRenderer.MessagePresentationState MessagePresentation);
 
     private readonly Dispatcher dispatcher;
     private readonly TranscriptListBox transcriptItems;
@@ -189,13 +191,16 @@ internal sealed class TranscriptListCoordinator
         var retryableTurns = RetryableTurns(visibleMessages, isAgentSpeaker);
         var latestTurn = visibleMessages.Max(message => message.Turn);
         var hasActiveSearch = transcriptSearch.HasActiveSearch;
+        var presentation = transcriptCards.CapturePresentationState();
         foreach (var message in visibleMessages.OrderByDescending(message => message.Turn))
         {
             rows.Add(new CardRow(
                 message,
                 retryableTurns.Contains(message.Turn),
                 hasActiveSearch,
-                message.Turn == latestTurn));
+                message.Turn == latestTurn,
+                presentation,
+                transcriptCards.CaptureMessagePresentationState(message, presentation)));
         }
 
         SetRows(rows, follow: followChatCheckBox.IsChecked == true);

@@ -2,7 +2,9 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using AIArena.Core.Models;
+using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
+using AIArena.Core.Services;
 
 internal static class ProviderReasoningOutcomeTests
 {
@@ -16,6 +18,104 @@ internal static class ProviderReasoningOutcomeTests
         ModelProviderApiModes.OllamaNative
     ];
     private static readonly ModelChatMessage[] Messages = [new("user", "Answer briefly.")];
+
+    internal static void PreservesPublicWhitespaceAcrossTransports()
+    {
+        const string output = " \tindented answer\r\n ";
+        foreach (var mode in Modes.Append(ModelProviderApiModes.LlamaCppNative))
+        foreach (var streaming in new[] { false, true })
+        {
+            var body = Body(mode, "stop", output);
+            using var handler = new ReplyHandler(streaming ? PublicStream(mode, body, output) : body);
+            using var http = new HttpClient(handler);
+            var result = Complete(new ModelProviderClient(http), Config(mode), streaming);
+            Require(result.Ok && result.Text == output && handler.Calls == 1,
+                $"{mode} ({(streaming ? "streaming" : "buffered")}) altered public whitespace at the provider boundary.");
+            var emptyBody = Body(mode, "stop", " \t\r\n");
+            using var emptyHandler = new ReplyHandler(streaming ? PublicStream(mode, emptyBody, " \t\r\n") : emptyBody);
+            using var emptyHttp = new HttpClient(emptyHandler);
+            var empty = Complete(new ModelProviderClient(emptyHttp), Config(mode), streaming);
+            Require(!empty.Ok && empty.FailureKind == ModelCompletionFailureKind.EmptyPublicContent,
+                $"{mode} whitespace-only output became a successful answer or an inconsistent public stream.");
+        }
+    }
+
+    internal static void PreservesPublicWhitespaceAcrossStreamFailures()
+    {
+        const string partial = " \tpartial answer\r\n ";
+        foreach (var mode in Modes.Append(ModelProviderApiModes.LlamaCppNative))
+        foreach (var transportFailure in new[] { false, true })
+        {
+            var prefix = mode switch
+            {
+                ModelProviderApiModes.LmStudioNative => "data: " + JsonSerializer.Serialize(new { type = "message.delta", content = partial }) + "\n\n",
+                ModelProviderApiModes.OllamaNative => JsonSerializer.Serialize(new { message = new { content = partial }, done = false }) + "\n",
+                _ => "data: " + JsonSerializer.Serialize(new { choices = new[] { new { delta = new { content = partial } } } }) + "\n\n"
+            };
+            using var handler = new ReplyHandler(prefix, failAtEof: transportFailure);
+            using var http = new HttpClient(handler);
+            var result = Complete(new ModelProviderClient(http), Config(mode), streaming: true);
+            Require(!result.Ok && result.Text == partial && handler.Calls == 1,
+                $"{mode} altered accepted partial output on {(transportFailure ? "transport failure" : "incomplete stream")}.");
+        }
+    }
+
+    internal static void ContinuationPreservesWhitespaceThroughRealProviderClient()
+    {
+        foreach (var mode in Modes.Append(ModelProviderApiModes.LlamaCppNative))
+        foreach (var streaming in new[] { false, true })
+        {
+            var tempRoot = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var root = Path.Combine(tempRoot, $"ai-arena-whitespace-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var store = new SessionStore(root);
+                var snapshot = SessionStore.CreateDefaultSnapshot();
+                var config = Config(mode);
+                snapshot.Configs["shared"] = config;
+                ModelRuntimeSettingsRegistry.Register(snapshot, config, 16384,
+                    ModelHistoryPolicies.Strict, ModelResponseTones.Default, "");
+                snapshot.Engine.Messages.Clear();
+                const string first = "The first half";
+                const string suffix = " and the second half.\r\n";
+                var partial = new DialogueMessage
+                {
+                    MessageId = "partial-answer", Turn = 2, SpeakerId = "alpha", Speaker = "Alpha",
+                    Text = first, Status = "ok", Kind = "message", CreatedAt = 2
+                };
+                partial.Metadata["completion_stop_reason"] = JsonSerializer.SerializeToElement("output_limit_reached");
+                CompletionRouteReceipt.Stamp(partial, CompletionRouteReceipt.Create(config, CompletionRouteReceipt.PrimaryPhase));
+                snapshot.Engine.Messages.Add(partial);
+                snapshot.Engine.TurnCount = 2;
+                store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+                var body = Body(mode, "stop", suffix);
+                using var handler = new ReplyHandler(streaming ? PublicStream(mode, body, suffix) : body);
+                using var http = new HttpClient(handler);
+                var result = new ContextRecoveryService(store, new ModelProviderClient(http))
+                    .ContinueOutputAsync("default", 2, "alpha", 2,
+                        progress: streaming ? new Progress<ArenaTurnProgress>() : null).GetAwaiter().GetResult();
+                Require(result.Ok && result.Message?.Text == first + suffix && handler.Calls == 1,
+                    $"{mode} continuation joined words or lost formatting through the real provider transport: {result.Error}");
+                var restored = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+                Require(restored.Engine.Messages.Single().Text == first + suffix,
+                    $"{mode} continuation did not persist exact public output.");
+            }
+            finally
+            {
+                Require(string.Equals(Path.GetDirectoryName(Path.GetFullPath(root)), tempRoot, StringComparison.OrdinalIgnoreCase)
+                    && Path.GetFileName(root).StartsWith("ai-arena-whitespace-", StringComparison.Ordinal),
+                    "refusing to clean a fixture outside its temporary root");
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static string PublicStream(string mode, string response, string output) =>
+        mode == ModelProviderApiModes.LmStudioNative
+            ? "data: " + JsonSerializer.Serialize(new { type = "message.delta", content = output })
+                + "\n\ndata: {\"type\":\"chat.end\",\"result\":" + response + "}\n\n"
+            : Stream(mode, response);
 
     internal static void IncludesExplicitNativeReasoningOffInBothPayloads()
     {

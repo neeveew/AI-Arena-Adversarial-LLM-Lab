@@ -339,7 +339,9 @@ public static class ModelRuntimeSettingsRegistry
         Timeout = config.Timeout,
         Temperature = config.Temperature,
         MaxOutputTokens = config.MaxOutputTokens,
-        ContextLength = config.ContextLength,
+        // This is a resolved request copy: keep the legacy fallback aligned so
+        // an explicit Provider default (0) cannot revive a previous override.
+        ContextLength = settings.ConfiguredContextWindow,
         ConfiguredContextWindow = settings.ConfiguredContextWindow,
         HistoryPolicy = settings.HistoryPolicy,
         ResponseTone = settings.ResponseTone,

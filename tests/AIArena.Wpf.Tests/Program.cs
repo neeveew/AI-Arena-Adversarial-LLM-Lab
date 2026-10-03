@@ -50,6 +50,9 @@ if (args.Length is 1 or 2 && args[0].Equals("--shared-popup-theme-fixture", Stri
 
 var tests = new List<(string Name, Action Test)>
 {
+    ("transcript presentation refreshes realized cards and completed stream hosts", TranscriptRealizedCardsRefreshPresentationWithoutReplacingStreamHost),
+    ("provider Models save failures release pending controls", ProviderModelsSaveFailuresReleasePendingControls),
+    ("provider Models committed saves survive secondary failures", ProviderModelsCommittedSavesSurviveSecondaryFailures),
     ("context recovery LmStudioRuntimeEvidenceSelectsExactInstanceAndConservativeAlias", LmStudioRuntimeEvidenceSelectsExactInstanceAndConservativeAlias),
     ("context recovery LmStudioRuntimeEvidenceKeepsUnknownAllocationsUnknown", LmStudioRuntimeEvidenceKeepsUnknownAllocationsUnknown),
     ("context recovery LmStudioRuntimeEvidenceRequiresSharedReasoningCapabilities", LmStudioRuntimeEvidenceRequiresSharedReasoningCapabilities),

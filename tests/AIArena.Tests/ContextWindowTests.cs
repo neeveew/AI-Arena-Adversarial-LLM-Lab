@@ -563,6 +563,61 @@ internal static class ContextWindowTests
         Require(snapshot.ModelSettings.Keys.All(key => key.StartsWith("model-settings:", StringComparison.Ordinal)
             && !key.Contains("model.gguf", StringComparison.OrdinalIgnoreCase)),
             "registry keys must not disclose provider model names");
+
+        foreach (var apiMode in new[] { ModelProviderApiModes.LmStudioNative, ModelProviderApiModes.OllamaNative })
+        {
+            var legacy = new ArenaSnapshot();
+            var staleConfig = new ModelProviderConfig
+            {
+                BaseUrl = "http://127.0.0.1:1234/v1",
+                ApiMode = apiMode,
+                Model = "legacy-context",
+                ContextLength = 8_192
+            };
+            legacy.Configs[ModelProviderRouting.SharedConfigKey] = staleConfig;
+            var inherited = ModelRuntimeSettingsRegistry.Resolve(legacy, staleConfig);
+            Require(ModelRuntimeSettingsRegistry.EffectiveConfiguredContextWindow(inherited) == 8_192,
+                $"{apiMode}: absent registry settings must retain the legacy context");
+            ModelRuntimeSettingsRegistry.Normalize(legacy);
+            Require(legacy.ModelSettings[ModelRuntimeSettingsRegistry.Identity(staleConfig)].ConfiguredContextWindow == 8_192,
+                $"{apiMode}: migration must retain the legacy context in the registry");
+
+            ModelRuntimeSettingsRegistry.Register(legacy, staleConfig, 16_384,
+                ModelHistoryPolicies.Rolling80, ModelResponseTones.Default, "");
+            var explicitContext = ModelProviderRouting.Resolve(legacy, "alpha", out _)!;
+            Require(ModelRuntimeSettingsRegistry.EffectiveConfiguredContextWindow(explicitContext) == 16_384,
+                $"{apiMode}: positive registry context must override a stale legacy context");
+            RequireWireContext(explicitContext, 16_384);
+
+            ModelRuntimeSettingsRegistry.Register(legacy, staleConfig, 0,
+                ModelHistoryPolicies.Rolling80, ModelResponseTones.Default, "");
+            var providerDefault = ModelProviderRouting.Resolve(legacy, "alpha", out _)!;
+            Require(ModelRuntimeSettingsRegistry.EffectiveConfiguredContextWindow(providerDefault) == 0,
+                $"{apiMode}: explicit Provider default must not resurrect a stale legacy context");
+            Require(ArenaRequestBudget.ContextWindow(providerDefault) == 0,
+                $"{apiMode}: Provider default must not impose the stale legacy context on prompt fitting");
+            RequireWireContext(providerDefault, 0);
+            Require(staleConfig.ContextLength == 8_192 && staleConfig.ConfiguredContextWindow == 0,
+                $"{apiMode}: resolving settings must not mutate the saved legacy configuration");
+        }
+
+        static void RequireWireContext(ModelProviderConfig config, int expected)
+        {
+            var lmStudio = ModelProviderApiModes.IsLmStudioNative(config.ApiMode);
+            var response = lmStudio
+                ? """{"model_instance_id":"legacy-context","output":[{"type":"message","content":"ok"}]}"""
+                : """{"model":"legacy-context","done":true,"message":{"role":"assistant","content":"ok"}}""";
+            using var handler = new CaptureHandler(response);
+            using var httpClient = new HttpClient(handler);
+            var completion = new ModelProviderClient(httpClient).CompleteChatAsync(
+                config, [new ModelChatMessage("user", "test")]).GetAwaiter().GetResult();
+            Require(completion.Ok && handler.Calls == 1, $"{config.ApiMode}: context regression must reach the provider once");
+            using var document = JsonDocument.Parse(handler.Body);
+            var options = lmStudio ? document.RootElement : document.RootElement.GetProperty("options");
+            var found = options.TryGetProperty(lmStudio ? "context_length" : "num_ctx", out var context);
+            Require(expected == 0 ? !found : found && context.GetInt32() == expected,
+                $"{config.ApiMode}: the wire request must honor the registry context, including an omitted Provider-default override");
+        }
     }
 
     public static void RollingBudgetDropsOnlyWholeOldestEntries()

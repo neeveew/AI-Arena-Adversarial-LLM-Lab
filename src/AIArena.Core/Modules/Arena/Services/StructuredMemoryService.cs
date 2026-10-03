@@ -186,13 +186,26 @@ public static partial class StructuredMemoryService
         EnsureStableMessageIds(snapshot.Engine.Messages);
 
         var sourceId = DialogueMessageIdentity.Resolve(message);
-        var prior = agent.MemoryEntries
+        var retired = agent.MemoryEntries
+            .SelectMany(entry => new[] { entry.SupersedesMemoryId, entry.CorrectionOfMemoryId })
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(IdentityComparer);
+        // Transcript retries preserve their source timestamp. Follow the active
+        // correction chain instead of choosing an ancestor with the same time.
+        var related = agent.MemoryEntries
             .Where(entry => IdentityComparer.Equals(entry.SourceMessageId, sourceId)
                 || (entry.Origin == StructuredMemoryOrigins.Turn && entry.SourceTurn == message.Turn))
+            .Reverse()
             .OrderByDescending(entry => entry.RevisedAt)
-            .FirstOrDefault();
+            .ToArray();
+        // Older snapshots can contain a closed retirement cycle after A -> B -> A.
+        // Keep that evidence untouched, but give the next retry a fresh descendant
+        // instead of reusing an old identity or reviving a retired same-text value.
+        var prior = related.FirstOrDefault(entry => !retired.Contains(entry.MemoryId))
+            ?? related.FirstOrDefault();
         var createdAt = nowUtc.ToUnixTimeSeconds();
-        if (prior is not null && prior.Text.Equals(text.Trim(), StringComparison.OrdinalIgnoreCase))
+        if (prior is not null && !retired.Contains(prior.MemoryId)
+            && prior.Text.Equals(text.Trim(), StringComparison.OrdinalIgnoreCase))
         {
             prior.RevisedAt = createdAt;
             prior.SourceMessageId = sourceId;
@@ -204,7 +217,12 @@ public static partial class StructuredMemoryService
             return prior;
         }
 
-        var id = StableId("memory", $"{agent.Id}\n{sourceId}\n{text.Trim()}");
+        // Returning to an earlier answer is a new correction, not a revival of
+        // its retired identity. Binding the identity to its predecessor keeps
+        // A -> B -> A acyclic while identical current retries remain idempotent.
+        var id = StableId("memory", prior is null
+            ? $"{agent.Id}\n{sourceId}\n{text.Trim()}"
+            : $"turn-correction\n{agent.Id}\n{sourceId}\n{prior.MemoryId}\n{text.Trim()}");
         var entry = new StructuredMemoryEntry
         {
             MemoryId = id,
@@ -221,7 +239,6 @@ public static partial class StructuredMemoryService
             IsCorrection = prior is not null
         };
 
-        agent.MemoryEntries.RemoveAll(existing => IdentityComparer.Equals(existing.MemoryId, entry.MemoryId));
         agent.MemoryEntries.Add(entry);
         MirrorTurnNote(agent, message.Turn, entry.Text);
         PruneAgentMemory(agent);
@@ -596,6 +613,11 @@ public static partial class StructuredMemoryService
                 excluded += additionallyRemoved;
                 unprojectable += additionallyRemoved;
             }
+
+            // This mirror change belongs to projection, not a legacy editor.
+            // Later normalization must rebuild retained historical ancestors
+            // instead of treating removal of future corrections as a user clear.
+            agent.PrivateNotesMirrorFingerprint = LegacyMirrorFingerprint(agent.PrivateNotes);
         }
 
         return new MemoryProjectionResult(excluded, unprojectable);
