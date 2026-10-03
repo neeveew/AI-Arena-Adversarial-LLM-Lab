@@ -25,6 +25,7 @@ if (-not [string]::IsNullOrWhiteSpace($SigningPolicy) -and $SigningPolicy -notin
 $innoScript = Join-Path $Root "packaging/inno/ai-arena-wpf.iss"
 $perUserMigrationScript = Join-Path $Root "packaging/inno/migrate-ai-arena-per-user.ps1"
 $releaseDir = Join-Path $Root "dist/AI Arena - $Version"
+& (Join-Path $Root 'scripts/test-release-compliance.ps1') -ReleaseDir $releaseDir
 $installerDir = Join-Path $Root "dist/installer/AI Arena - $Version"
 $installer = Join-Path $installerDir "AI Arena Setup $Version.exe"
 $changelog = Join-Path $installerDir "changelog.md"

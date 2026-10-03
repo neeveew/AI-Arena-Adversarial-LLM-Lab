@@ -15,3 +15,11 @@ The AI Arena - Lite licence above applies to this edition's original code and as
 The optional local-search payload includes SearXNG under AGPL-3.0-or-later. Its exact source revision, verified archive hash, licence, corresponding-source location, Python package inventory, and per-file hashes are installed under the `searxng` directory. The installer presents the SearXNG licence before an interactive full installation.
 
 The payload also contains the CPython embeddable runtime and Python packages under their respective upstream licences. Their licence and package metadata remain beside the installed payload files.
+
+## .NET components
+
+The .NET runtime, WPF, Roslyn, and other NuGet dependencies retain their upstream
+licences. Installed `THIRD-PARTY-NOTICES.md` lists their versions, copyright
+attributions, and the licence texts in `third-party/`. The no-derivatives terms
+for AI Arena's original work do not restrict modification or redistribution of
+these separately licensed components.

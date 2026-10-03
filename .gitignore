@@ -16,3 +16,5 @@ TestResults/
 artifacts/
 .ai-arena/analysis/
 map/
+.claude/
+.artifacts/

@@ -4,6 +4,15 @@ Version 1.0
 
 Copyright © 2026 Dominik Fiala
 
+## Scope
+
+This licence applies only to the original AI Arena - Lite code, documentation,
+and assets, except files explicitly carrying a different licence. It does not
+apply to third-party components or restrict rights granted by their licences.
+Bundled dependency licences and notices are provided in `THIRD-PARTY-NOTICES.md`,
+`third-party/`, and `searxng/`. The SearXNG service and
+`packaging/arena_searxng_wsgi.py` are licensed under AGPL-3.0-or-later.
+
 ## 1. Permission to Share
 
 You are granted permission to copy, share, publish, distribute, and redistribute this software, including its source code and related documentation, provided that:

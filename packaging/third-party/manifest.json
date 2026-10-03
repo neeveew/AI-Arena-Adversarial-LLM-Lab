@@ -1,0 +1,562 @@
+{
+  "schemaVersion": 1,
+  "packages": [
+    {
+      "package": "AngleSharp/1.5.2",
+      "license": "MIT",
+      "authors": "AngleSharp",
+      "copyright": "Copyright 2013-2026, AngleSharp.",
+      "files": [
+        {
+          "file": "AngleSharp/1.5.2/UPSTREAM-LICENSE.txt",
+          "sha256": "6da3ab781b570d2c45102e74b366c0be0eb758ed0205c3b23093d6ac2231d394",
+          "source": "https://github.com/AngleSharp/AngleSharp/blob/8033a5c690af9c2c443f58e34875343fa4cc1d07/LICENSE"
+        }
+      ]
+    },
+    {
+      "package": "Google.Protobuf/3.36.1",
+      "license": "BSD-3-Clause",
+      "authors": "Google Inc.",
+      "copyright": "Copyright 2015, Google Inc.",
+      "files": [
+        {
+          "file": "Google.Protobuf/3.36.1/UPSTREAM-LICENSE.txt",
+          "sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d",
+          "source": "https://github.com/protocolbuffers/protobuf/blob/f377bfefc5e2cfab68b816903c25b23e091c439d/LICENSE"
+        }
+      ]
+    },
+    {
+      "package": "Humanizer.Core/2.14.1",
+      "license": "MIT",
+      "authors": "Mehdi Khalili, Claire Novotny",
+      "copyright": "Copyright (c) .NET Foundation and Contributors",
+      "files": [
+        {
+          "file": "Humanizer.Core/2.14.1/UPSTREAM-LICENSE.txt",
+          "sha256": "e24ec7f2eea5c5f4b3e2c08308109ba99b49b4b56ea7ff0e0a178f2bdd4bbce8",
+          "source": "https://github.com/Humanizr/Humanizer/blob/3ebc38de585fc641a04b0e78ed69468453b0f8a1/LICENSE"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.Build.Locator/1.11.2",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.Build.Locator/1.11.2/UPSTREAM-LICENSE.txt",
+          "sha256": "990b71168a54194e2c0414bedfc3702b62cd0ae57a06240d874eb95ea8a81f69",
+          "source": "https://github.com/microsoft/MSBuildLocator/blob/89a9d0858a83930f5066e4fa0bf0d154e24095d7/LICENSE"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.CodeAnalysis.Analyzers/5.3.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.CodeAnalysis.Analyzers/5.3.0/ThirdPartyNotices.txt",
+          "sha256": "0eabe2880daf9bfb25ac160b1e779c5da95a88406dd06cdb570ec7edb5eabb76",
+          "source": "https://www.nuget.org/packages/Microsoft.CodeAnalysis.Analyzers/5.3.0#ThirdPartyNotices.txt"
+        },
+        {
+          "file": "Microsoft.CodeAnalysis.Analyzers/5.3.0/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/roslyn/blob/16f9bd284cd49604ac82998bfe778a8eb16d4347/License.txt"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.CodeAnalysis.Common/5.6.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.CodeAnalysis.Common/5.6.0/ThirdPartyNotices.rtf",
+          "sha256": "ef4678850e7e3aaf9297f07e5c4060d477854e545ccf8e2ef8452d65a7b2efaf",
+          "source": "https://www.nuget.org/packages/Microsoft.CodeAnalysis.Common/5.6.0#ThirdPartyNotices.rtf"
+        },
+        {
+          "file": "Microsoft.CodeAnalysis.Common/5.6.0/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/License.txt"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.CodeAnalysis.CSharp/5.6.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.CodeAnalysis.CSharp/5.6.0/ThirdPartyNotices.rtf",
+          "sha256": "ef4678850e7e3aaf9297f07e5c4060d477854e545ccf8e2ef8452d65a7b2efaf",
+          "source": "https://www.nuget.org/packages/Microsoft.CodeAnalysis.CSharp/5.6.0#ThirdPartyNotices.rtf"
+        },
+        {
+          "file": "Microsoft.CodeAnalysis.CSharp/5.6.0/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/License.txt"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.CodeAnalysis.CSharp.Workspaces/5.6.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.CodeAnalysis.CSharp.Workspaces/5.6.0/ThirdPartyNotices.rtf",
+          "sha256": "ef4678850e7e3aaf9297f07e5c4060d477854e545ccf8e2ef8452d65a7b2efaf",
+          "source": "https://www.nuget.org/packages/Microsoft.CodeAnalysis.CSharp.Workspaces/5.6.0#ThirdPartyNotices.rtf"
+        },
+        {
+          "file": "Microsoft.CodeAnalysis.CSharp.Workspaces/5.6.0/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/License.txt"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.CodeAnalysis.Workspaces.Common/5.6.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.CodeAnalysis.Workspaces.Common/5.6.0/ThirdPartyNotices.rtf",
+          "sha256": "ef4678850e7e3aaf9297f07e5c4060d477854e545ccf8e2ef8452d65a7b2efaf",
+          "source": "https://www.nuget.org/packages/Microsoft.CodeAnalysis.Workspaces.Common/5.6.0#ThirdPartyNotices.rtf"
+        },
+        {
+          "file": "Microsoft.CodeAnalysis.Workspaces.Common/5.6.0/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/License.txt"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.6.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.6.0/ThirdPartyNotices.rtf",
+          "sha256": "ef4678850e7e3aaf9297f07e5c4060d477854e545ccf8e2ef8452d65a7b2efaf",
+          "source": "https://www.nuget.org/packages/Microsoft.CodeAnalysis.Workspaces.MSBuild/5.6.0#ThirdPartyNotices.rtf"
+        },
+        {
+          "file": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.6.0/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/License.txt"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts/5.6.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts/5.6.0/ThirdPartyNotices.rtf",
+          "sha256": "ef4678850e7e3aaf9297f07e5c4060d477854e545ccf8e2ef8452d65a7b2efaf",
+          "source": "https://www.nuget.org/packages/Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts/5.6.0#ThirdPartyNotices.rtf"
+        },
+        {
+          "file": "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts/5.6.0/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/License.txt"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.Extensions.DependencyInjection/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.Extensions.DependencyInjection/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/Microsoft.Extensions.DependencyInjection/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "Microsoft.Extensions.DependencyInjection/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.Extensions.DependencyInjection.Abstractions/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.Extensions.DependencyInjection.Abstractions/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/Microsoft.Extensions.DependencyInjection.Abstractions/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "Microsoft.Extensions.DependencyInjection.Abstractions/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.Extensions.Logging/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.Extensions.Logging/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/Microsoft.Extensions.Logging/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "Microsoft.Extensions.Logging/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.Extensions.Logging.Abstractions/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.Extensions.Logging.Abstractions/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/Microsoft.Extensions.Logging.Abstractions/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "Microsoft.Extensions.Logging.Abstractions/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.Extensions.Options/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.Extensions.Options/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/Microsoft.Extensions.Options/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "Microsoft.Extensions.Options/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.Extensions.Primitives/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.Extensions.Primitives/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/Microsoft.Extensions.Primitives/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "Microsoft.Extensions.Primitives/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.IO.RecyclableMemoryStream/3.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.IO.RecyclableMemoryStream/3.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "7d6aa3550cf7aeb25ef542f616d8ead585633e3b607c65e1db4aa804e4971a91",
+          "source": "https://github.com/microsoft/Microsoft.IO.RecyclableMemoryStream/blob/e29a28387da9018fa9605a1dcb3f7a0435aa9974/LICENSE"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.VisualStudio.SolutionPersistence/1.0.52",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.VisualStudio.SolutionPersistence/1.0.52/NOTICE",
+          "sha256": "2d56342544395b1cc4bb98192a439031362265125a68b8062942383b8df4309a",
+          "source": "https://www.nuget.org/packages/Microsoft.VisualStudio.SolutionPersistence/1.0.52#NOTICE"
+        },
+        {
+          "file": "Microsoft.VisualStudio.SolutionPersistence/1.0.52/UPSTREAM-LICENSE.txt",
+          "sha256": "b5cb7ff7859e7d282d98fc43ab081b0dda5dc659dc3385cf65740c759a7e6a6c",
+          "source": "https://github.com/microsoft/vs-solutionpersistence/blob/19c3ca7dc997dba2b3a86f6c666e9f717f34c8fe/LICENSE"
+        }
+      ]
+    },
+    {
+      "package": "PuppeteerSharp/25.1.1",
+      "license": "MIT",
+      "authors": "Dar\u00edo Kondratiuk",
+      "copyright": null,
+      "files": [
+        {
+          "file": "PuppeteerSharp/25.1.1/UPSTREAM-LICENSE.txt",
+          "sha256": "1279093ab7ba45de583d84ad5f84871d0478b4ea28ca57de2c3c6504bc419c5d",
+          "source": "https://github.com/hardkoded/puppeteer-sharp/blob/db9b160658ac966d9809493698984a0936db50c6/LICENSE"
+        }
+      ]
+    },
+    {
+      "package": "SmartReader/0.11.1",
+      "license": "Apache-2.0",
+      "authors": "Gabriele Tomassetti",
+      "copyright": "Strumenta",
+      "files": [
+        {
+          "file": "SmartReader/0.11.1/UPSTREAM-LICENSE.txt",
+          "sha256": "59899c6091b540582ed617e8eeaac4919dc985ccfc35459ee9752b699be5205b",
+          "source": "https://github.com/Strumenta/SmartReader/blob/e4b0c878d369d88fbb2b10999b9d8db191226ee8/LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "package": "System.Composition/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "System.Composition/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/System.Composition/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "System.Composition/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "System.Composition.AttributedModel/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "System.Composition.AttributedModel/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/System.Composition.AttributedModel/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "System.Composition.AttributedModel/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "System.Composition.Convention/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "System.Composition.Convention/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/System.Composition.Convention/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "System.Composition.Convention/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "System.Composition.Hosting/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "System.Composition.Hosting/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/System.Composition.Hosting/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "System.Composition.Hosting/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "System.Composition.Runtime/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "System.Composition.Runtime/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/System.Composition.Runtime/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "System.Composition.Runtime/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "System.Composition.TypedParts/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "System.Composition.TypedParts/10.0.1/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/System.Composition.TypedParts/10.0.1#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "System.Composition.TypedParts/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "System.Management/10.0.8",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "System.Management/10.0.8/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/System.Management/10.0.8#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "System.Management/10.0.8/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/94ea82652cdd4e0f8046b5bd5becbd11461482ca/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "System.Speech/10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "System.Speech/10.0.9/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/System.Speech/10.0.9#THIRD-PARTY-NOTICES.TXT"
+        },
+        {
+          "file": "System.Speech/10.0.9/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/901ca941248413c79832d2fdbd709da0c4386353/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "package": "WebDriverBiDi/0.0.49",
+      "license": "MIT",
+      "authors": "WebDriverBiDi.NET Committers",
+      "copyright": null,
+      "files": [
+        {
+          "file": "WebDriverBiDi/0.0.49/UPSTREAM-LICENSE.txt",
+          "sha256": "0d7155f64009670ec2835cdb899318496f17fb4764b2875877f5eefdbcc5ae53",
+          "source": "https://github.com/webdriverbidi-net/webdriverbidi-net/blob/78ea551fc4e48d78da28bdb2af412a0e0141aa24/LICENSE"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.NETCore.App.Runtime.win-x64/10.0.11",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.NETCore.App.Runtime.win-x64/10.0.11/LICENSE.TXT",
+          "sha256": "d7a68596ab69b06f51ca278a6545148e4269a9381c26d597c13df5d88e08cf5b",
+          "source": "https://www.nuget.org/packages/Microsoft.NETCore.App.Runtime.win-x64/10.0.11#LICENSE.TXT"
+        },
+        {
+          "file": "Microsoft.NETCore.App.Runtime.win-x64/10.0.11/THIRD-PARTY-NOTICES.TXT",
+          "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+          "source": "https://www.nuget.org/packages/Microsoft.NETCore.App.Runtime.win-x64/10.0.11#THIRD-PARTY-NOTICES.TXT"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.WindowsDesktop.App.Runtime.win-x64/10.0.11",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.WindowsDesktop.App.Runtime.win-x64/10.0.11/LICENSE",
+          "sha256": "a89886665765362eb77e0f8e26602c924520041d1711b2eedc136434fe4d01ab",
+          "source": "https://www.nuget.org/packages/Microsoft.WindowsDesktop.App.Runtime.win-x64/10.0.11#LICENSE"
+        }
+      ]
+    },
+    {
+      "package": "Microsoft.Build.Locator/1.10.2",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "Microsoft.Build.Locator/1.10.2/UPSTREAM-LICENSE.txt",
+          "sha256": "990b71168a54194e2c0414bedfc3702b62cd0ae57a06240d874eb95ea8a81f69",
+          "source": "https://github.com/microsoft/MSBuildLocator/blob/694ff392b2dcf6ac58fe865afd1c982eb9449014/LICENSE"
+        }
+      ]
+    },
+    {
+      "package": "System.Collections.Immutable/10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "files": [
+        {
+          "file": "System.Collections.Immutable/10.0.1/UPSTREAM-LICENSE.txt",
+          "sha256": "ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b",
+          "source": "https://github.com/dotnet/dotnet/blob/fad253f51b461736dfd3cd9c15977bb7493becef/LICENSE.TXT"
+        }
+      ]
+    }
+  ]
+}

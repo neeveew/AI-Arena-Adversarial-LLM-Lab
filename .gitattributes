@@ -13,3 +13,7 @@ packaging/inno/migrate-ai-arena-per-user.ps1 text eol=lf
 
 *.png binary
 *.ico binary
+
+# Reviewed upstream notices are hashed byte-for-byte; do not change their
+# line endings when cloning or checking out on another platform.
+packaging/third-party/** -text -eol

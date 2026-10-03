@@ -322,6 +322,7 @@ import site
 '@ | Set-Content -LiteralPath (Join-Path $pythonDir "python311._pth") -Encoding ASCII
 
 @'
+# SPDX-License-Identifier: AGPL-3.0-or-later
 from collections import namedtuple
 _Pw = namedtuple('struct_passwd', 'pw_name pw_passwd pw_uid pw_gid pw_gecos pw_dir pw_shell')
 def getpwuid(uid):
@@ -373,6 +374,27 @@ $pipArguments = @(
     '-r', $dependencyLockFull
 )
 Invoke-AIArenaNativeCommand -FilePath $py.Source -ArgumentList $pipArguments -Label 'Bundled SearXNG dependency installation'
+
+# pip console launchers embed the build machine's Python path. The app starts
+# its bundled interpreter with '-m granian', so these launchers are unused.
+$consoleLaunchers = [IO.Path]::GetFullPath((Join-Path $sitePackagesDir 'bin'))
+Assert-AIArenaPathWithinDirectory -Path $consoleLaunchers -Directory $sitePackagesDir -Label 'Unused Python console launchers'
+if (Test-Path -LiteralPath $consoleLaunchers) {
+    Remove-Item -LiteralPath $consoleLaunchers -Recurse -Force
+}
+# Colorama ships its upstream unit-test sources in its wheel. They are not
+# needed by its runtime and are not part of the consumer application's payload.
+$coloramaTests = [IO.Path]::GetFullPath((Join-Path $sitePackagesDir 'colorama/tests'))
+Assert-AIArenaPathWithinDirectory -Path $coloramaTests -Directory $sitePackagesDir -Label 'Upstream Colorama test sources'
+if (Test-Path -LiteralPath $coloramaTests) {
+    Remove-Item -LiteralPath $coloramaTests -Recurse -Force
+}
+
+# Ship the exact full upstream source as well as the runtime subset. The
+# project-owned AGPL gateway and Windows shim are shipped as editable .py files.
+$sourceBundle = Join-Path $payloadDir 'source'
+New-Item -ItemType Directory -Path $sourceBundle -Force | Out-Null
+Copy-Item -LiteralPath $sourceZip -Destination (Join-Path $sourceBundle 'searxng-upstream.zip')
 
 @'
 # AI Arena's private, app-managed SearXNG profile. Engine definitions remain
@@ -430,6 +452,12 @@ Boundary source: packaging/arena_searxng_wsgi.py in the AI Arena source tree.
 
 The corresponding SearXNG source for this bundled revision is available from:
 $SearxngUrl
+
+An exact copy of that verified archive is included in source/searxng-upstream.zip.
+The AGPL gateway is installed as runtime/arena_searxng_wsgi.py; the generated
+Windows compatibility shim is runtime/pwd.py. Runtime configuration is settings.yml.
+Reproduction inputs are UPSTREAM-LOCK.json and PYTHON-REQUIREMENTS-LOCK.txt.
+The release's public source tree includes scripts/build-searxng-payload.ps1.
 "@ | Set-Content -LiteralPath (Join-Path $payloadDir "SEARXNG-SOURCE-OFFER.txt") -Encoding UTF8
 
 Get-ChildItem -LiteralPath $payloadDir -Directory -Recurse -Filter "__pycache__" -ErrorAction SilentlyContinue |

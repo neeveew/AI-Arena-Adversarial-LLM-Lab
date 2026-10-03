@@ -5,7 +5,7 @@
 ## Start
 
 ```powershell
-node "C:\AI Workspace\Codex\ai-arena\scripts\codex-openai-bridge.mjs"
+node .\scripts\codex-openai-bridge.mjs
 ```
 
 Optional settings:
@@ -17,7 +17,7 @@ $env:CODEX_BRIDGE_REASONING_EFFORT = "low"
 $env:CODEX_BRIDGE_WEB_SEARCH = "enabled"
 $env:CODEX_BRIDGE_TOKEN = "local-secret"
 $env:CODEX_BRIDGE_WORKDIR = "$env:TEMP\ai-arena-codex-bridge-workspace"
-node "C:\AI Workspace\Codex\ai-arena\scripts\codex-openai-bridge.mjs"
+node .\scripts\codex-openai-bridge.mjs
 ```
 
 The bridge defaults `CODEX_BRIDGE_REASONING_EFFORT` to `low`, the lowest reasoning effort that works with the current Codex Desktop/CLI tool set. The documented `minimal` level is rejected by this Codex path while built-in tools such as `image_gen` are attached. The bridge disables reasoning summaries and defaults `CODEX_BRIDGE_WEB_SEARCH` to `enabled` so Codex can use recent public web knowledge for live topic generation and debate. Set `CODEX_BRIDGE_WEB_SEARCH=disabled` before starting the bridge to turn that off.

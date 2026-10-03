@@ -77,6 +77,7 @@ if ((-not [string]::IsNullOrWhiteSpace($VerificationReceiptPath)) `
     -ne (-not [string]::IsNullOrWhiteSpace($VerificationReceiptKey))) {
     throw 'VerificationReceiptPath and VerificationReceiptKey must be supplied together.'
 }
+& (Join-Path $repoRoot 'scripts/tests/release-compliance.tests.ps1')
 if (-not [string]::IsNullOrWhiteSpace($VerificationReceiptPath)) {
     [void](Invoke-AIArenaReleaseVerificationHarnesses `
         -RepositoryRoot $repoRoot `
@@ -105,6 +106,12 @@ $publishArgs = @(
     "-p:PublishSingleFile=false",
     "-p:PublishReadyToRun=true",
     "-p:UseAppHost=true",
+    # Public builds must not embed the developer's checkout in CodeView,
+    # SourceLink, caller-file paths, or portable PDBs.
+    "-p:ContinuousIntegrationBuild=true",
+    "-p:PathMap=$repoRoot=/_/",
+    "-p:DebugType=None",
+    "-p:DebugSymbols=false",
     "--self-contained", $SelfContained.IsPresent.ToString().ToLowerInvariant()
 )
 Invoke-AIArenaNativeCommand -FilePath $dotnet.Source -ArgumentList $publishArgs -Label 'WPF release publish'
@@ -154,10 +161,12 @@ if ($SelfContained.IsPresent) {
 }
 
 & $searxngPayloadScript -OutputDir $output
+& (Join-Path $repoRoot 'scripts/prepare-release-compliance.ps1') -ReleaseDir $output
 if (-not (Test-Path -LiteralPath $controlPlaneHelper -PathType Leaf)) {
     throw "PowerShell control helper is missing: $controlPlaneHelper"
 }
 Copy-Item -LiteralPath $controlPlaneHelper -Destination (Join-Path $output "ai-arena-control.ps1")
+& (Join-Path $repoRoot 'scripts/test-release-compliance.ps1') -ReleaseDir $output
 
 $signatureRecords = @(Invoke-AIArenaAuthenticodeSigning -Configuration $signing -Path @($exe))
 $releaseSigning = [ordered]@{
