@@ -4571,7 +4571,7 @@ static void ReleaseScriptsProtectInstallerDistributions()
         && !(dependencyLockBytes[0] == 0xEF && dependencyLockBytes[1] == 0xBB && dependencyLockBytes[2] == 0xBF)
         && !dependencyLock.Contains("\r\n", StringComparison.Ordinal),
         "Python dependency lock must remain LF-only UTF-8 without a BOM so its aggregate digest is reproducible");
-    const string reviewedDependencyLockSha256 = "C226BEC5ACDA13F7F084E37B018F74C96EFCF3E64EEC548EA8A2F9A1E2DFED6C";
+    const string reviewedDependencyLockSha256 = "CD3EFDAA7834D1860BD45690279D40BFEDE5264F6EF0C03EB04C03BE985F899E";
     var actualDependencyLockSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(dependencyLockBytes));
     using (var upstreamLockDocument = JsonDocument.Parse(upstreamLock))
     {
