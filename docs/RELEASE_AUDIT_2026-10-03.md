@@ -1,10 +1,11 @@
 # AI Arena Lite publication audit — 3 October 2026
 
-The original 0.4.142-beta installer is **not cleared for publication**. Its
-packaged application contains local build paths and lacks the .NET dependency
-notices now required by the repaired release pipeline. A fresh candidate payload
-passes the new checks. The final installer must be rebuilt through that pipeline;
-the candidate is verification evidence, not a replacement release.
+The final **0.4.144-beta** installer passes the repaired production pipeline and
+the publisher's independent packaging checks. The final verification and
+dependency-security follow-up are recorded below. The original 0.4.142-beta
+installer is **not cleared for publication**: it contains local build paths and
+lacks the .NET dependency notices required by the repaired pipeline. The
+intermediate 0.4.143-beta draft is also held because of its AnyIO dependency.
 
 Audited source: `a5eab85d69b85c288717bd7f5e8fe0d1b8a71563`.
 Application source tree: `3c5fd8e0ee7468f3ab7a02bae4fcb36d0f67ce6f`.
@@ -71,3 +72,42 @@ Internal evidence is retained under `artifacts/release-audit-20261003/`, which i
 excluded from Git and must not be uploaded with the release. Publication should
 use a fresh production installer, its new checksums and source identity after
 the repaired pipeline and ordinary release checks pass.
+
+## Final production and dependency-security follow-up
+
+The production rebuild first produced 0.4.143-beta, which passed the packaging
+and application checks. GitHub's dependency alerts then identified three AnyIO
+4.14.1 advisories, so that candidate remains an **unpublished draft**. A separate
+0.4.144-beta build updates the optional bundled search service to AnyIO 4.14.2:
+
+- [TLS hostname validation, critical](https://github.com/advisories/GHSA-82r6-8w77-94w6).
+- [POSIX subprocess supplementary groups, high](https://github.com/advisories/GHSA-3w57-8xmc-8v26).
+- [Process-pool stderr deadlock, moderate](https://github.com/advisories/GHSA-5p39-cfhj-2xmp).
+
+The official `anyio-4.14.2-py3-none-any.whl` digest is
+`9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494`.
+It retains the MIT licence and supports the bundled Python version. AnyIO is a
+transitive dependency of the pinned SearXNG source: all 19 exact direct upstream
+requirements and the pristine source archive remain unchanged. Added checks
+verify the wheel and licence, reject a stale aggregate dependency-lock digest,
+and validate the installed dependency inventory.
+
+The 0.4.144-beta production pipeline completed successfully, including unfiltered
+Core and WPF suites, authenticated verification receipt, guide/dependency-index/
+XAML/migration checks, Inno Setup compilation and final compliance on **4,580
+files**. The publisher independently rechecked the installer hash, both checksum
+manifests and the final payload compliance gate.
+
+- Source commit: `020da9ad9b818a4b0608c8da185f3de009c698c4`.
+- Application source tree: `1d60e9ff7601eff70eddd2de5871e423c16dbae5`.
+- Installer: `AI Arena Setup 0.4.144-beta.exe`, 111,556,189 bytes.
+- Installer SHA-256: `98c359f280914c4ffb26906e7c4864337d119630ba6eeaf9697dcf1b235c6746`.
+- Signing: unsigned under the existing Optional policy.
+
+NuGet's current vulnerability check reported no known vulnerable packages in the
+WPF project's resolved direct/transitive dependencies. Version-specific PyPI
+metadata returned no known advisories for all 41 locked Python distributions
+after the AnyIO update. These are dated feed checks, not proof that unknown
+vulnerabilities are absent. Separate development-branch app fixes are excluded
+from this release. Earlier audit scope and legal/provenance limitations continue
+to apply.
