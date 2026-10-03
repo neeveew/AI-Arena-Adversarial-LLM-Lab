@@ -12,9 +12,13 @@ public sealed record ContextRecoveryResult(
     ModelCompletionResult? Completion,
     string Error)
 {
+    // Executed can also mean a provider attempt failed without replacing its source.
+    public bool Committed { get; init; }
+    public string EvidenceWarning { get; init; } = "";
+
     public static ContextRecoveryResult Failed(string error) => new(false, false, null, null, error);
     public static ContextRecoveryResult Completed(DialogueMessage message, ModelCompletionResult? completion = null) =>
-        new(true, true, message, completion, "");
+        new(true, true, message, completion, "") { Committed = true };
 }
 
 /// <summary>Causal recovery actions for input-context and output-limit outcomes.</summary>
@@ -86,12 +90,13 @@ public sealed class ContextRecoveryService
 
         snapshot.Engine.LastError = "";
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-        await _eventLogStore.AppendAsync(
-            sessionId,
-            "context_recovery_turn_skipped",
-            new { turn = message.Turn, speaker = message.SpeakerId, failure_kind = "context_limit_exceeded" },
-            cancellationToken);
-        return ContextRecoveryResult.Completed(message);
+        var evidenceError = await PostCommitEvidence.TryAppendAsync(
+            _eventLogStore, sessionId, "context_recovery_turn_skipped",
+            new { turn = message.Turn, speaker = message.SpeakerId, failure_kind = "context_limit_exceeded" });
+        return ContextRecoveryResult.Completed(message) with
+        {
+            EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+        };
     }
 
     public async Task<ContextRecoveryResult> ContinueOutputAsync(
@@ -279,27 +284,19 @@ public sealed class ContextRecoveryService
             await _sessionStore.SaveSnapshotAsync(current, sessionId, cancellationToken);
             continuationCommitted = true;
             progressScope.Complete(replacement);
-            try
+            var evidenceError = await PostCommitEvidence.TryAppendAsync(
+                _eventLogStore, sessionId, "context_recovery_output_continued",
+                new
+                {
+                    turn = replacement.Turn,
+                    speaker = replacement.SpeakerId,
+                    continuation_count = MetadataInt(replacement, ContinuationCountMetadataKey),
+                    stop_reason = ModelCompletionOutcomeClassifier.StopReasonWire(completion.StopReason)
+                });
+            return ContextRecoveryResult.Completed(replacement, completion) with
             {
-                await _eventLogStore.AppendAsync(
-                    sessionId,
-                    "context_recovery_output_continued",
-                    new
-                    {
-                        turn = replacement.Turn,
-                        speaker = replacement.SpeakerId,
-                        continuation_count = MetadataInt(replacement, ContinuationCountMetadataKey),
-                        stop_reason = ModelCompletionOutcomeClassifier.StopReasonWire(completion.StopReason)
-                    },
-                    CancellationToken.None);
-            }
-            catch
-            {
-                // The transcript replacement is already committed atomically;
-                // diagnostic logging must not turn success into a false failure.
-            }
-
-            return ContextRecoveryResult.Completed(replacement, completion);
+                EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+            };
         }
         catch (OperationCanceledException)
         {
@@ -360,19 +357,8 @@ public sealed class ContextRecoveryService
         {
             return ContextRecoveryResult.Failed("The session changed before the end-match marker could be saved.");
         }
-        try
-        {
-            await _eventLogStore.AppendAsync(
-                sessionId,
-                "context_recovery_match_ended",
-                new { reason = normalizedReason },
-                CancellationToken.None);
-        }
-        catch
-        {
-            // The terminal marker is already committed atomically. Diagnostic
-            // logging cannot make that durable result appear to have failed.
-        }
+        var evidenceError = await PostCommitEvidence.TryAppendAsync(
+            _eventLogStore, sessionId, "context_recovery_match_ended", new { reason = normalizedReason });
         var marker = new DialogueMessage
         {
             Turn = snapshot.Engine.TurnCount,
@@ -387,7 +373,10 @@ public sealed class ContextRecoveryService
                 [RecoveryDispositionMetadataKey] = JsonSerializer.SerializeToElement("match_ended")
             }
         };
-        return ContextRecoveryResult.Completed(marker);
+        return ContextRecoveryResult.Completed(marker) with
+        {
+            EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+        };
     }
 
     private async Task ClearContinuationAttemptAsync(

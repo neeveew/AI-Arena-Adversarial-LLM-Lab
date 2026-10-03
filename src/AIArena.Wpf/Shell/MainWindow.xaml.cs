@@ -484,7 +484,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             _transcriptService,
             () => _activeSession,
             () => _arenaBusy,
-            SaveSnapshotForCoordinatorAsync,
+            (status, action) => RunArenaBusyForCoordinatorAsync(status, null, action, false),
+            SaveSnapshotWithFeedbackAsync,
             RefreshActiveSessionForTranscriptMutationAsync,
             SetLoadStatus,
             SetTranscriptMutationStatus);
@@ -5906,7 +5907,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             || status.StartsWith("Unpinned turn ", StringComparison.Ordinal);
         var blocked = status.Contains("Factory group root", StringComparison.Ordinal);
         var state = succeeded
-            ? ApplicationStatusState.Succeeded
+            ? status.Contains("Warning:", StringComparison.Ordinal) ? ApplicationStatusState.Warning : ApplicationStatusState.Succeeded
             : blocked
                 ? ApplicationStatusState.Blocked
                 : ApplicationStatusState.Failed;
@@ -5998,7 +5999,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     }
 
     private Task RefreshActiveSessionForTranscriptMutationAsync(string status) =>
-        RefreshActiveSessionAsync(status, setArenaStatus: false);
+        RefreshActiveSessionAsync(status, CancellationToken.None, setArenaStatus: false, propagateFailure: true);
 
     private void DiagnosticDetailCloseButton_Click(object sender, RoutedEventArgs e)
     {

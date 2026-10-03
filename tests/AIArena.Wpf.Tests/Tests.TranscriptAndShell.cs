@@ -1990,10 +1990,11 @@ static void TranscriptMutationCoordinatorFormatsStatuses()
             transcriptService,
             () => active,
             () => false,
-            async (changed, id) =>
+            async (_, action) => { await action(CancellationToken.None); return true; },
+            async (changed, id, cancellationToken) =>
             {
                 saveCalls++;
-                await sessionStore.SaveSnapshotAsync(changed, id);
+                await sessionStore.SaveSnapshotAsync(changed, id, cancellationToken);
             },
             _ =>
             {

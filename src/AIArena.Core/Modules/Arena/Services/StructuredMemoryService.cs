@@ -139,8 +139,13 @@ public static partial class StructuredMemoryService
             .ToHashSet(IdentityComparer);
         var now = nowUtc.ToUnixTimeSeconds();
 
+        var conflictedHeads = snapshot.Engine.Agents.SelectMany(owner =>
+        {
+            var excluded = LegacyTurnHeadsExcludedFromCurrentMemory(snapshot, owner);
+            return owner.MemoryEntries.Where(entry => excluded.Contains(entry.MemoryId));
+        }).ToHashSet();
         return scoped
-            .Where(entry => !retired.Contains(entry.MemoryId))
+            .Where(entry => !retired.Contains(entry.MemoryId) && !conflictedHeads.Contains(entry))
             .Where(entry => entry.ExpiresAt is null || entry.ExpiresAt.Value > now)
             .OrderBy(entry => entry.RevisedAt > 0 ? entry.RevisedAt : entry.CreatedAt)
             .ToArray();
@@ -192,9 +197,17 @@ public static partial class StructuredMemoryService
             .ToHashSet(IdentityComparer);
         // Transcript retries preserve their source timestamp. Follow the active
         // correction chain instead of choosing an ancestor with the same time.
+        var generatedTurnNote = ParseLegacyTurn(text) == message.Turn;
         var related = agent.MemoryEntries
-            .Where(entry => IdentityComparer.Equals(entry.SourceMessageId, sourceId)
-                || (entry.Origin == StructuredMemoryOrigins.Turn && entry.SourceTurn == message.Turn))
+            .Where(entry => (entry.Origin == StructuredMemoryOrigins.Turn
+                    || (entry.Origin == StructuredMemoryOrigins.LegacyUnknown
+                        && generatedTurnNote
+                        && !entry.SourceProvenanceAmbiguous
+                        && entry.SourceTurn == message.Turn
+                        && IdentityComparer.Equals(entry.SourceMessageId, sourceId)))
+                && IsBranchVisible(entry, snapshot.BranchReceipt?.Id ?? "")
+                && (!generatedTurnNote || ParseLegacyTurn(entry.Text) == message.Turn)
+                && (IdentityComparer.Equals(entry.SourceMessageId, sourceId) || entry.SourceTurn == message.Turn))
             .Reverse()
             .OrderByDescending(entry => entry.RevisedAt)
             .ToArray();
@@ -633,7 +646,7 @@ public static partial class StructuredMemoryService
         if (!string.IsNullOrWhiteSpace(agent.PrivateNotesMirrorFingerprint)
             && !agent.PrivateNotesMirrorFingerprint.Equals(incomingMirrorFingerprint, StringComparison.Ordinal))
         {
-            changed |= ReconcileLegacyMirrorEdits(agent);
+            changed |= ReconcileLegacyMirrorEdits(snapshot, agent);
         }
 
         var used = new HashSet<string>(IdentityComparer);
@@ -699,6 +712,7 @@ public static partial class StructuredMemoryService
             .SelectMany(entry => new[] { entry.SupersedesMemoryId, entry.CorrectionOfMemoryId })
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToHashSet(IdentityComparer);
+        retired.UnionWith(LegacyTurnHeadsExcludedFromCurrentMemory(snapshot, agent));
         var now = (fixedNowUtc ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
         var activeEntries = agent.MemoryEntries
             .Where(entry => !retired.Contains(entry.MemoryId))
@@ -741,7 +755,7 @@ public static partial class StructuredMemoryService
         return changed;
     }
 
-    private static bool ReconcileLegacyMirrorEdits(DialogueAgent agent)
+    private static bool ReconcileLegacyMirrorEdits(ArenaSnapshot snapshot, DialogueAgent agent)
     {
         if (agent.MemoryEntries.Count == 0)
         {
@@ -761,6 +775,8 @@ public static partial class StructuredMemoryService
             .SelectMany(entry => new[] { entry.SupersedesMemoryId, entry.CorrectionOfMemoryId })
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToHashSet(IdentityComparer);
+        var hiddenAutomaticConflicts = LegacyTurnHeadsExcludedFromCurrentMemory(snapshot, agent);
+        retired.UnionWith(hiddenAutomaticConflicts);
         var expectedMirrorEntries = agent.MemoryEntries
             .Where(entry => !retired.Contains(entry.MemoryId))
             .TakeLast(LegacyMirrorLimit);
@@ -784,10 +800,89 @@ public static partial class StructuredMemoryService
                 changed |= !string.IsNullOrWhiteSpace(entry.SupersedesMemoryId) && removeIds.Add(entry.SupersedesMemoryId);
                 changed |= !string.IsNullOrWhiteSpace(entry.CorrectionOfMemoryId) && removeIds.Add(entry.CorrectionOfMemoryId);
             }
+            // A hidden legacy sibling must not revive when the visible current
+            // note is explicitly removed. Other records may only be absent
+            // because the compatibility mirror is bounded.
+            foreach (var entry in agent.MemoryEntries.Where(entry =>
+                hiddenAutomaticConflicts.Contains(entry.MemoryId) && !mirrorTexts.Contains(entry.Text)))
+            {
+                if (removeIds.Contains(entry.SupersedesMemoryId) || removeIds.Contains(entry.CorrectionOfMemoryId))
+                    changed |= removeIds.Add(entry.MemoryId);
+            }
         }
 
+        // Retained operator corrections still own their ancestry even when a
+        // parallel current note is removed from the compatibility editor.
+        var protectedIds = agent.MemoryEntries.Where(entry => !removeIds.Contains(entry.MemoryId))
+            .Select(entry => entry.MemoryId).ToHashSet(IdentityComparer);
+        var expanded = true;
+        while (expanded)
+        {
+            expanded = false;
+            foreach (var entry in agent.MemoryEntries.Where(entry => protectedIds.Contains(entry.MemoryId)))
+            {
+                if (!string.IsNullOrWhiteSpace(entry.SupersedesMemoryId)) expanded |= protectedIds.Add(entry.SupersedesMemoryId);
+                if (!string.IsNullOrWhiteSpace(entry.CorrectionOfMemoryId)) expanded |= protectedIds.Add(entry.CorrectionOfMemoryId);
+            }
+        }
+        removeIds.ExceptWith(protectedIds);
         agent.MemoryEntries.RemoveAll(entry => removeIds.Contains(entry.MemoryId));
-        return true;
+        return removeIds.Count > 0;
+    }
+
+    /// <summary>
+    /// Old retries could leave parallel current values with identical source
+    /// timestamps. The retained transcript can identify today's value, but it
+    /// cannot prove the order of old corrections. Filter conflicting heads;
+    /// never rewrite their stored identities, timestamps, or correction edges.
+    /// </summary>
+    private static HashSet<string> LegacyTurnHeadsExcludedFromCurrentMemory(ArenaSnapshot snapshot, DialogueAgent agent)
+    {
+        var excluded = new HashSet<string>(IdentityComparer);
+        foreach (var sourceGroup in agent.MemoryEntries
+            .Where(entry => entry.Origin == StructuredMemoryOrigins.Turn)
+            .GroupBy(entry => (Source: (entry.SourceMessageId ?? "").Trim().ToUpperInvariant(), Branch: (entry.BranchId ?? "").Trim().ToUpperInvariant())))
+        {
+            var entries = sourceGroup.ToArray();
+            if (entries.Length < 2) continue;
+            var parents = new Dictionary<string, string>(IdentityComparer);
+            string Root(string id)
+            {
+                if (!parents.TryGetValue(id, out var parent)) return parents[id] = id;
+                return IdentityComparer.Equals(parent, id) ? id : parents[id] = Root(parent);
+            }
+            var turnRetired = new HashSet<string>(IdentityComparer);
+            foreach (var entry in entries)
+            {
+                foreach (var target in new[] { entry.SupersedesMemoryId, entry.CorrectionOfMemoryId })
+                {
+                    if (string.IsNullOrWhiteSpace(target)) continue;
+                    parents[Root(entry.MemoryId)] = Root(target);
+                    turnRetired.Add(target);
+                }
+            }
+            var sources = snapshot.Engine.Messages.Where(message =>
+                IdentityComparer.Equals(DialogueMessageIdentity.Resolve(message), sourceGroup.Key.Source)
+                && IdentityComparer.Equals(message.SpeakerId, agent.Id)).Take(2).ToArray();
+            var source = sources.Length == 1 ? sources[0] : null;
+            var currentText = source is null ? "" : TurnRunnerService.BuildPrivateMemoryNote(source);
+            // Compute heads before expiry or manual retirement. Otherwise an
+            // expired/corrected winner would resurrect a known competing value.
+            foreach (var component in entries.Where(entry => !turnRetired.Contains(entry.MemoryId))
+                .GroupBy(entry => Root(entry.MemoryId), IdentityComparer))
+            {
+                var heads = component.ToArray();
+                if (heads.Length < 2) continue;
+                var matches = heads.Where(entry => source is not null && currentText.Length > 0
+                    && !entry.SourceProvenanceAmbiguous
+                    && (entry.SourceTurn is null || entry.SourceTurn == source.Turn)
+                    && string.Equals(entry.Text, currentText, StringComparison.Ordinal)).Take(2).ToArray();
+                var winner = matches.Length == 1 ? matches[0] : null;
+                foreach (var head in heads)
+                    if (!ReferenceEquals(head, winner)) excluded.Add(head.MemoryId);
+            }
+        }
+        return excluded;
     }
 
     private static string LegacyMirrorFingerprint(IEnumerable<string> notes)

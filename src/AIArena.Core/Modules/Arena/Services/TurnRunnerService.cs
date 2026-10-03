@@ -611,7 +611,7 @@ public sealed class TurnRunnerService
         DialogueMessageIdentity.Resolve(left).Equals(DialogueMessageIdentity.Resolve(right), StringComparison.Ordinal)
         || TranscriptService.SameMessageIdentity(left, right.Turn, right.SpeakerId, right.CreatedAt);
 
-    private static string BuildPrivateMemoryNote(DialogueMessage message)
+    internal static string BuildPrivateMemoryNote(DialogueMessage message)
     {
         if (message.Status.Equals("error", StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrWhiteSpace(message.Text)

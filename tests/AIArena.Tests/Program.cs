@@ -265,6 +265,11 @@ var tests = new List<(string Name, Action Test)>
     ("forks full session state without mutating source", ForkFullSessionStateWithoutMutatingSource),
     ("fork session names are atomic and lineage is direct", ForkSessionNamesAreAtomicAndLineageIsDirect),
     ("fork session rejects missing and corrupt sources", ForkSessionRejectsMissingAndCorruptSources),
+    ("provider multipart preserves compatible text parts across transports", ProviderMultipartContentTests.PreservesCompatibleTextPartsAcrossTransports),
+    ("context recovery committed actions retain outcomes when evidence fails", ContextRecoveryCommitTests.CommittedActionsRetainResultsWhenEvidenceFails),
+    ("context recovery uncommitted actions preserve failure and cancellation", ContextRecoveryCommitTests.UncommittedActionsPreserveFailureAndCancellation),
+    ("legacy memory conflicts preserve current meaning and historical evidence", LegacyMemoryConflictTests.ResolvesCurrentTurnWithoutRewritingLegacyHistory),
+    ("legacy memory conflicts survive persistence and historical projection", LegacyMemoryConflictTests.PersistsAndProjectsLegacyConflictsWithoutInventingHistory),
     ("structured memory migrates legacy notes and stable message ids", MemoryForkTests.MigratesLegacyMemoryAndStableMessageIds),
     ("structured memory selects only active scoped provenance", MemoryForkTests.SelectsOnlyActiveScopedMemoryWithProvenance),
     ("structured memory retention and legacy mirror are bounded", MemoryForkTests.BoundsStructuredMemoryAndLegacyMirror),
@@ -729,7 +734,7 @@ static void ExtractStructuredAssistantCompletionContent()
     """;
 
     var text = ModelProviderClient.ExtractAssistantContent(json);
-    Require(text == $"first paragraph{Environment.NewLine}second paragraph", "structured assistant content should preserve all text parts");
+    Require(text == "first paragraphsecond paragraph", "structured assistant content should concatenate provider text parts without inserting separators");
 
     var client = new ModelProviderClient(new HttpClient(new CaptureHandler(json)));
     var result = client.CompleteChatAsync(

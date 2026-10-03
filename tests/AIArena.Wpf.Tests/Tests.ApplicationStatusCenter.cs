@@ -333,10 +333,10 @@ internal static partial class Program
         var transcriptMutationStatus = CSharpMethodBlock(mainWindowSource, "private void SetTranscriptMutationStatus");
         Require(mainWindowSource.Contains("SetTranscriptMutationStatus);", StringComparison.Ordinal)
                 && mainWindowSource.Contains("RefreshActiveSessionForTranscriptMutationAsync", StringComparison.Ordinal)
-                && mainWindowSource.Contains("RefreshActiveSessionAsync(status, setArenaStatus: false)", StringComparison.Ordinal)
+                && mainWindowSource.Contains("RefreshActiveSessionAsync(status, CancellationToken.None, setArenaStatus: false, propagateFailure: true)", StringComparison.Ordinal)
                 && transcriptMutationStatus.Contains("\"app.transcript-mutation\"", StringComparison.Ordinal)
                 && transcriptMutationStatus.Contains("ApplicationStatusState.Blocked", StringComparison.Ordinal)
-                && transcriptMutationSource.Contains("setMutationStatus?.Invoke(successStatus);", StringComparison.Ordinal)
+                && transcriptMutationSource.Contains("SetStatus(presentation.Status);", StringComparison.Ordinal)
                 && transcriptMutationSource.Contains("setMutationStatus?.Invoke(status);", StringComparison.Ordinal),
             "transcript pin/delete outcomes and blocked failures should use one dedicated status-center callback without the generic Arena mirror");
         var internetDiagnostic = CSharpMethodBlock(internetSource, "public async Task TestInternetAsync()");

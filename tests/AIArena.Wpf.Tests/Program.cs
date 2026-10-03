@@ -50,6 +50,9 @@ if (args.Length is 1 or 2 && args[0].Equals("--shared-popup-theme-fixture", Stri
 
 var tests = new List<(string Name, Action Test)>
 {
+    ("transcript mutations reserve arena and drain shutdown", TranscriptMutationReservesArenaAndDrainsShutdown),
+    ("transcript mutations preserve durable outcomes after failures", TranscriptMutationFailuresPreserveDurableOutcome),
+    ("context recovery presentation preserves saved warnings", ContextRecoveryPresentationPreservesSavedWarnings),
     ("transcript presentation refreshes realized cards and completed stream hosts", TranscriptRealizedCardsRefreshPresentationWithoutReplacingStreamHost),
     ("provider Models save failures release pending controls", ProviderModelsSaveFailuresReleasePendingControls),
     ("provider Models committed saves survive secondary failures", ProviderModelsCommittedSavesSurviveSecondaryFailures),

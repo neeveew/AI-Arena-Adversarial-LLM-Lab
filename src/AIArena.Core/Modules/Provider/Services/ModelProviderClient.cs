@@ -1177,7 +1177,9 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                             continue;
                         }
 
-                        var contentDelta = FirstString(delta, "content");
+                        var contentDelta = delta.TryGetProperty("content", out var deltaContent)
+                            ? ExtractNativeTextContent(deltaContent)
+                            : "";
                         var reasoningDelta = FirstString(delta, "reasoning_content", "reasoning", "thinking");
                         if (acceptedFirstTokenMs <= 0 && (contentDelta.Length > 0 || reasoningDelta.Length > 0))
                         {
@@ -2483,26 +2485,22 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
             return "";
         }
 
-        var parts = new List<string>();
+        // Content parts belong to one message: separators and indentation are
+        // provider text, not formatting to invent at each part boundary.
+        var text = new StringBuilder();
         foreach (var part in content.EnumerateArray())
         {
             if (part.ValueKind == JsonValueKind.String)
             {
-                parts.Add(part.GetString() ?? "");
-                continue;
+                text.Append(part.GetString());
             }
-
-            if (part.ValueKind == JsonValueKind.Object)
+            else if (part.ValueKind == JsonValueKind.Object)
             {
-                var text = FirstString(part, "text", "content", "output_text");
-                if (!string.IsNullOrWhiteSpace(text))
-                {
-                    parts.Add(text);
-                }
+                text.Append(FirstString(part, "text", "content", "output_text"));
             }
         }
 
-        return string.Join(Environment.NewLine, parts.Where(part => !string.IsNullOrWhiteSpace(part)));
+        return text.ToString();
     }
 
     private static JsonElement? FirstAssistantMessage(JsonElement root)

@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using AIArena.Wpf.Controls;
+using AIArena.Core.Services;
 
 namespace AIArena.Wpf;
 
@@ -230,14 +231,8 @@ public partial class MainWindow
                     session.Id,
                     "operator_context_limit_end",
                     cancellationToken);
-                if (!result.Ok)
-                {
-                    throw new InvalidOperationException(result.Error);
-                }
-
-                await RefreshActiveSessionAsync(
-                    "Match ended by the operator after a context-limit stop.",
-                    cancellationToken);
+                await RefreshContextRecoveryOutcomeAsync(
+                    result, "Match ended by the operator after a context-limit stop.");
             },
             allowDuringAutoChat: false);
         if (!ran)
@@ -278,12 +273,8 @@ public partial class MainWindow
                     message.SpeakerId,
                     message.CreatedAt,
                     cancellationToken);
-                if (!result.Ok)
-                {
-                    throw new InvalidOperationException(result.Error);
-                }
-
-                await RefreshActiveSessionAsync("Skipped the blocked turn. Auto Chat remains stopped.", cancellationToken);
+                await RefreshContextRecoveryOutcomeAsync(
+                    result, "Skipped the blocked turn. Auto Chat remains stopped.");
             },
             allowDuringAutoChat: false);
         if (!ran)
@@ -313,19 +304,29 @@ public partial class MainWindow
                     message.SpeakerId,
                     message.CreatedAt,
                     cancellationToken, progress);
-                progress.Flush();
-                if (!result.Ok)
-                {
-                    throw new InvalidOperationException(result.Error);
-                }
-
-                await RefreshActiveSessionAsync("Continued the output-limited response.", cancellationToken);
+                await RefreshContextRecoveryOutcomeAsync(
+                    result, "Continued the output-limited response.", progress);
             },
             allowDuringAutoChat: false);
         if (!ran)
         {
             SetArenaRunStatus("Output continuation is unavailable while another arena operation is active.");
         }
+    }
+
+    private async Task RefreshContextRecoveryOutcomeAsync(
+        ContextRecoveryResult result, string outcome, ArenaTranscriptStreamCoordinator.StreamOperation? progress = null)
+    {
+        if (!result.Ok)
+        {
+            progress?.Flush();
+            throw new InvalidOperationException(result.Error);
+        }
+
+        var presentation = await AppPostCommitEvidence.RefreshAsync(
+            AppPostCommitEvidence.AppendWarning(outcome, result.EvidenceWarning), result.Committed,
+            RefreshActiveSessionAfterTurnAsync, AppErrorContext.Arena, () => progress?.Flush());
+        ArenaRunStatus.Text = LoadStatus.Text = presentation.Status;
     }
 
     private void CloseProviderModelsPanel()

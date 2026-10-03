@@ -13,7 +13,8 @@ internal sealed class TranscriptMutationCoordinator
     private readonly TranscriptService transcriptService;
     private readonly Func<CoreSessionSummary?> activeSession;
     private readonly Func<bool> isArenaBusy;
-    private readonly Func<CoreArenaSnapshot, string, Task> saveSnapshotAsync;
+    private readonly Func<string, Func<CancellationToken, Task>, Task<bool>> runMutationAsync;
+    private readonly Func<CoreArenaSnapshot, string, CancellationToken, Task> saveSnapshotAsync;
     private readonly Func<string, Task> refreshActiveSessionAsync;
     private readonly Action<string> setLoadStatus;
     private readonly Action<string>? setMutationStatus;
@@ -24,7 +25,8 @@ internal sealed class TranscriptMutationCoordinator
         TranscriptService transcriptService,
         Func<CoreSessionSummary?> activeSession,
         Func<bool> isArenaBusy,
-        Func<CoreArenaSnapshot, string, Task> saveSnapshotAsync,
+        Func<string, Func<CancellationToken, Task>, Task<bool>> runMutationAsync,
+        Func<CoreArenaSnapshot, string, CancellationToken, Task> saveSnapshotAsync,
         Func<string, Task> refreshActiveSessionAsync,
         Action<string> setLoadStatus,
         Action<string>? setMutationStatus = null)
@@ -34,6 +36,7 @@ internal sealed class TranscriptMutationCoordinator
         this.transcriptService = transcriptService;
         this.activeSession = activeSession;
         this.isArenaBusy = isArenaBusy;
+        this.runMutationAsync = runMutationAsync;
         this.saveSnapshotAsync = saveSnapshotAsync;
         this.refreshActiveSessionAsync = refreshActiveSessionAsync;
         this.setLoadStatus = setLoadStatus;
@@ -48,24 +51,24 @@ internal sealed class TranscriptMutationCoordinator
             return;
         }
 
-        await MutateTranscriptAsync(DeleteStatus(message), async snapshot =>
+        await MutateTranscriptAsync(session!, "Deleting transcript turn…", snapshot =>
         {
             var storedMessage = TranscriptService.FindMessage(snapshot, message.Turn, message.SpeakerId, message.CreatedAt);
             if (storedMessage is not null && FactoryConversationService.IsConversationRoot(storedMessage))
             {
                 SetStatus(FactoryRootDeleteBlockedStatus(message));
-                return false;
+                return null;
             }
 
             var deleted = transcriptService.DeleteMessage(snapshot, message.Turn, message.SpeakerId, message.CreatedAt);
             if (!deleted)
             {
                 SetStatus($"Could not find turn {message.Turn} to delete.");
-                return false;
+                return null;
             }
 
-            await eventLogStore.AppendAsync(session!.Id, "native_transcript_message_deleted", new { message.Turn, message.Speaker, message.SpeakerId });
-            return true;
+            return new MutationOutcome(DeleteStatus(message), "native_transcript_message_deleted",
+                new { message.Turn, message.Speaker, message.SpeakerId });
         });
     }
 
@@ -77,17 +80,18 @@ internal sealed class TranscriptMutationCoordinator
             return;
         }
 
-        await MutateTranscriptAsync(PinStatus(message), async snapshot =>
+        await MutateTranscriptAsync(session!, "Updating transcript pin…", snapshot =>
         {
             var changed = transcriptService.TogglePinned(snapshot, message.Turn, message.SpeakerId, message.CreatedAt, out var pinned);
             if (!changed)
             {
                 SetStatus($"Could not find turn {message.Turn} to pin.");
-                return false;
+                return null;
             }
 
-            await eventLogStore.AppendAsync(session!.Id, pinned ? "native_transcript_message_pinned" : "native_transcript_message_unpinned", new { message.Turn, message.Speaker, message.SpeakerId });
-            return true;
+            return new MutationOutcome(PinStatus(message.Turn, pinned),
+                pinned ? "native_transcript_message_pinned" : "native_transcript_message_unpinned",
+                new { message.Turn, message.Speaker, message.SpeakerId });
         });
     }
 
@@ -108,34 +112,50 @@ internal sealed class TranscriptMutationCoordinator
 
     internal static string PinStatus(TranscriptMessage message)
     {
-        return message.Pinned
-            ? $"Unpinned turn {message.Turn}."
-            : $"Pinned turn {message.Turn}.";
+        return PinStatus(message.Turn, !message.Pinned);
     }
 
-    private async Task MutateTranscriptAsync(string successStatus, Func<CoreArenaSnapshot, Task<bool>> mutation)
+    private static string PinStatus(int turn, bool pinned) =>
+        pinned ? $"Pinned turn {turn}." : $"Unpinned turn {turn}.";
+
+    private sealed record MutationOutcome(string Status, string EventType, object Payload);
+
+    private async Task MutateTranscriptAsync(
+        CoreSessionSummary session, string progressStatus, Func<CoreArenaSnapshot, MutationOutcome?> mutation)
     {
-        var session = activeSession();
-        if (session is null)
+        await runMutationAsync(progressStatus, async cancellationToken =>
         {
-            return;
-        }
+            try
+            {
+                var snapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
+                if (!string.Equals(activeSession()?.Id, session.Id, StringComparison.OrdinalIgnoreCase)) return;
+                if (snapshot is null)
+                {
+                    SetStatus($"No snapshot found for session {session.Id}.");
+                    return;
+                }
 
-        var snapshot = await sessionStore.LoadSnapshotAsync(session.Id);
-        if (snapshot is null)
-        {
-            SetStatus($"No snapshot found for session {session.Id}.");
-            return;
-        }
+                var outcome = mutation(snapshot);
+                if (outcome is null) return;
 
-        if (!await mutation(snapshot))
-        {
-            return;
-        }
-
-        await saveSnapshotAsync(snapshot, session.Id);
-        await refreshActiveSessionAsync(successStatus);
-        setMutationStatus?.Invoke(successStatus);
+                await saveSnapshotAsync(snapshot, session.Id, cancellationToken);
+                var evidence = await AppPostCommitEvidence.TryAppendAsync(
+                    eventLogStore, session.Id, outcome.EventType, outcome.Payload, AppErrorContext.Arena);
+                var presentation = await AppPostCommitEvidence.RefreshAsync(
+                    evidence.AppendTo(outcome.Status), committed: true, refreshActiveSessionAsync, AppErrorContext.Arena);
+                SetStatus(presentation.Status);
+            }
+            catch (SnapshotConcurrencyException)
+            {
+                SetStatus("The session changed before the transcript edit was saved. Refresh the transcript and try again.");
+            }
+            catch (Exception exception)
+            {
+                // These commands are invoked from async UI handlers. Pre-save
+                // failures must remain reported outcomes, not fatal dispatcher errors.
+                SetStatus(AppErrorPresenter.Present(exception, AppErrorContext.Arena).DisplayText);
+            }
+        });
     }
 
     private void SetStatus(string status)
