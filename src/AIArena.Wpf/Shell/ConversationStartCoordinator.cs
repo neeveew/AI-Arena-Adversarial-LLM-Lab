@@ -157,7 +157,7 @@ internal sealed class ConversationStartCoordinator
 
         if (!receipt.Completed)
         {
-            sendFailureHint = "The public message was saved, but completion failed. Review the transcript and reported error before retrying.";
+            sendFailureHint = "The public message was saved, but its view could not be refreshed. Refresh the transcript before starting Auto Chat.";
             UpdateActions();
             return;
         }

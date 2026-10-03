@@ -120,14 +120,19 @@ public sealed class NarratorService : IDisposable
             snapshot.Engine.LastError = result.Ok ? "" : result.Error;
 
             await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-            await _eventLogStore.AppendAsync(
+            var evidenceError = await PostCommitEvidence.TryAppendAsync(
+                _eventLogStore,
                 sessionId,
                 result.Ok ? "native_decision_card_completed" : "native_decision_card_failed",
-                new { result.Model, result.LatencyMs, error = result.Error },
-                cancellationToken);
-            return result.Ok
+                new { result.Model, result.LatencyMs, error = result.Error });
+            var outcome = result.Ok
                 ? DecisionCardResult.Completed(snapshot.Engine.DecisionCard.Text)
                 : DecisionCardResult.Failed(result.Error, snapshot.Engine.DecisionCard.Text);
+            return outcome with
+            {
+                Committed = true,
+                EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -226,16 +231,17 @@ public sealed class NarratorService : IDisposable
 
             await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
             progressScope.Complete(message);
-            await _eventLogStore.AppendAsync(
+            var evidenceError = await PostCommitEvidence.TryAppendAsync(
+                _eventLogStore,
                 sessionId,
                 result.Ok
                     ? string.IsNullOrWhiteSpace(operatorRequest) ? "native_narrator_completed" : "native_narrator_operator_request_completed"
                     : string.IsNullOrWhiteSpace(operatorRequest) ? "native_narrator_failed" : "native_narrator_operator_request_failed",
-                new { message.Turn, message.Status, message.Model.Model, message.Model.LatencyMs, error = result.Error },
-                cancellationToken);
-            return result.Ok
+                new { message.Turn, message.Status, message.Model.Model, message.Model.LatencyMs, error = result.Error });
+            var outcome = result.Ok
                 ? NarratorResult.Completed(message)
                 : NarratorResult.Failed(result.Error, message);
+            return outcome with { EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError) };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -844,12 +850,17 @@ public sealed class NarratorService : IDisposable
 
 public sealed record NarratorResult(bool Ok, DialogueMessage? Message, string Error)
 {
+    public string EvidenceWarning { get; init; } = "";
+
     public static NarratorResult Completed(DialogueMessage message) => new(true, message, "");
     public static NarratorResult Failed(string error, DialogueMessage? message = null) => new(false, message, error);
 }
 
 public sealed record DecisionCardResult(bool Ok, string Text, string Error)
 {
+    public string EvidenceWarning { get; init; } = "";
+    public bool Committed { get; init; }
+
     public static DecisionCardResult Completed(string text) => new(true, text, "");
     public static DecisionCardResult Failed(string error, string text = "") => new(false, text, error);
 }

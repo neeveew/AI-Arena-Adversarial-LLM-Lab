@@ -802,14 +802,20 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                     }
                 }
 
+                var streamedText = content.ToString();
+                // An error may be followed by a truncated or contradictory terminal
+                // body. Preserve the public text already delivered to progress;
+                // terminal text is a fallback only when no usable public delta arrived.
+                var failureText = !string.IsNullOrWhiteSpace(streamedText)
+                    || string.IsNullOrWhiteSpace(terminalResult?.Text)
+                    ? streamedText
+                    : terminalResult.Text;
+
                 // LM Studio documents error -> chat.end as a normal failure
                 // sequence. Error evidence must win over the terminal result;
                 // the latter is retained only for safe partial/token evidence.
                 if (!string.IsNullOrWhiteSpace(acceptedStreamError))
                 {
-                    var partialText = !string.IsNullOrWhiteSpace(terminalResult?.Text)
-                        ? terminalResult.Text
-                        : content.ToString();
                     var partialReasoning = !string.IsNullOrWhiteSpace(terminalResult?.Reasoning)
                         ? terminalResult.Reasoning
                         : reasoning.ToString().Trim();
@@ -817,7 +823,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                         false,
                         baseUrl,
                         terminalResult?.Model ?? model,
-                        partialText,
+                        failureText,
                         partialReasoning,
                         (int)watch.ElapsedMilliseconds,
                         terminalResult?.PromptTokens ?? 0,
@@ -836,9 +842,6 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
 
                 if (acceptedMalformedEvent)
                 {
-                    var partialText = !string.IsNullOrWhiteSpace(terminalResult?.Text)
-                        ? terminalResult.Text
-                        : content.ToString();
                     var partialReasoning = !string.IsNullOrWhiteSpace(terminalResult?.Reasoning)
                         ? terminalResult.Reasoning
                         : reasoning.ToString().Trim();
@@ -846,7 +849,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                         false,
                         baseUrl,
                         terminalResult?.Model ?? model,
-                        partialText,
+                        failureText,
                         partialReasoning,
                         (int)watch.ElapsedMilliseconds,
                         terminalResult?.PromptTokens ?? 0,
@@ -865,7 +868,6 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
 
                 if (terminalResult is not null)
                 {
-                    var streamedText = content.ToString();
                     if (!string.IsNullOrWhiteSpace(streamedText)
                         && !string.Equals(streamedText, terminalResult.Text, StringComparison.Ordinal))
                     {
@@ -888,12 +890,11 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                         terminalResult.Ok ? "succeeded" : "empty_response");
                 }
 
-                var partialContent = content.ToString();
                 var incomplete = new ModelCompletionResult(
                     false,
                     baseUrl,
                     model,
-                    partialContent,
+                    streamedText,
                     reasoning.ToString().Trim(),
                     (int)watch.ElapsedMilliseconds,
                     0,

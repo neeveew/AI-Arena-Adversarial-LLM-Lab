@@ -1891,7 +1891,8 @@ static void ProviderModelsConfigurationReloadHandlesProviderDefaultAndUncertainM
 static string CreateProviderCatalogTestRoot(string label)
 {
     var workspace = Path.GetFullPath(Environment.CurrentDirectory);
-    Require(Directory.Exists(Path.Combine(workspace, ".git")),
+    var gitPath = Path.Combine(workspace, ".git");
+    Require(Directory.Exists(gitPath) || File.Exists(gitPath),
         "provider catalog tests must run from the repository root");
     var ownedParent = Path.GetFullPath(Path.Combine(
         workspace,

@@ -54,6 +54,8 @@ var tests = new List<(string Name, Action Test)>
     ("Arena streaming reports committed turns and retries", ArenaTurnStreamingTests.TurnsAndRetryReportOnlyCommittedFinalMessages),
     ("Arena streaming separates fallback and repair attempts", ArenaTurnStreamingTests.FallbackAndRepairSeparateAttemptsAndDiscardLateDeltas),
     ("Arena streaming isolates cancellation errors and observers", ArenaTurnStreamingTests.CancellationErrorsAndObserverFailuresPreservePersistence),
+    ("arena committed outcomes survive observer cancellation", ArenaTurnStreamingTests.CommittedOutcomesSurviveObserverCancellation),
+    ("arena committed outcomes preserve provider result when evidence fails", ArenaTurnStreamingTests.CommittedOutcomesPreserveProviderResultWhenEvidenceFails),
     ("Arena streaming reports narration and continuation", ArenaTurnStreamingTests.NarrationAndContinuationReportCommittedIdentity),
     ("Arena streaming protects tool requests and buffered clients", ArenaTurnStreamingTests.ToolRequestsStayPrivateAndBufferedClientsRemainCompatible),
     ("Ollama streams incrementally and keeps terminal evidence", OllamaStreamingTests.StreamsIncrementallyAndKeepsTerminalEvidence),

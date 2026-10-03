@@ -386,7 +386,8 @@ public sealed class TurnRunnerService
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         progressScope.Complete(message);
-        await _eventLogStore.AppendAsync(
+        var evidenceError = await PostCommitEvidence.TryAppendAsync(
+            _eventLogStore,
             sessionId,
             result.Ok ? $"{eventPrefix}_completed" : $"{eventPrefix}_failed",
             new
@@ -395,9 +396,11 @@ public sealed class TurnRunnerService
                 message = new { message.Turn, message.Speaker, message.Status, message.Model.Model, message.Model.LatencyMs },
                 factory_mode = factoryMode,
                 error = result.Error
-            },
-            cancellationToken);
-            return OneTurnResult.Completed(plan, message, result);
+            });
+            return OneTurnResult.Completed(plan, message, result) with
+            {
+                EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -534,7 +537,8 @@ public sealed class TurnRunnerService
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         progressScope.Complete(replacement);
-        await _eventLogStore.AppendAsync(
+        var evidenceError = await PostCommitEvidence.TryAppendAsync(
+            _eventLogStore,
             sessionId,
             result.Ok ? "native_retry_message_replaced" : "native_retry_message_failed",
             new
@@ -543,9 +547,11 @@ public sealed class TurnRunnerService
                 message = new { replacement.Turn, replacement.Speaker, replacement.Status, replacement.Model.Model, replacement.Model.LatencyMs },
                 factory_mode = factoryMode,
                 error = result.Error
-            },
-            cancellationToken);
-            return OneTurnResult.Completed(plan, replacement, result);
+            });
+            return OneTurnResult.Completed(plan, replacement, result) with
+            {
+                EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -2388,6 +2394,8 @@ public sealed record OneTurnPlan(bool Ok, string AgentId, string AgentName, Mode
 
 public sealed record OneTurnResult(bool Ok, bool Executed, OneTurnPlan? Plan, DialogueMessage? Message, ModelCompletionResult? Completion, string Error)
 {
+    public string EvidenceWarning { get; init; } = "";
+
     public static OneTurnResult Completed(OneTurnPlan plan, DialogueMessage message, ModelCompletionResult completion) => new(true, true, plan, message, completion, "");
 
     public static OneTurnResult Failed(string error) => new(false, false, null, null, null, error);

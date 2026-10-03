@@ -2055,6 +2055,19 @@ static void ArenaRunCoordinatorFormatsStatuses()
     Require(ArenaRunCoordinator.RetryStatus(original, completed) == "Retry replaced turn 5: Alpha (model-a, 321 ms)", "retry success status should remain stable");
     Require(ArenaRunCoordinator.NarratorStatus(NarratorResult.Completed(message)) == "Narrator added turn 5 (model-a, 321 ms)", "narrator success status should remain stable");
     Require(ArenaRunCoordinator.AutoChatStatus(OneTurnResult.Failed("offline")) == "Auto Chat stopped: offline", "auto-chat failure status should include error");
+    const string evidenceWarning = "Warning: the response was saved, but activity-log evidence is unavailable.";
+    var completedWithWarning = completed with { EvidenceWarning = evidenceWarning };
+    foreach (var status in new[]
+    {
+        ArenaRunCoordinator.AutoChatStatus(completedWithWarning),
+        ArenaRunCoordinator.OneTurnStatus(completedWithWarning),
+        ArenaRunCoordinator.AgentTurnStatus(agent, completedWithWarning),
+        ArenaRunCoordinator.RetryStatus(original, completedWithWarning),
+        ArenaRunCoordinator.NarratorStatus(NarratorResult.Completed(message) with { EvidenceWarning = evidenceWarning })
+    })
+        Require(status.EndsWith(evidenceWarning, StringComparison.Ordinal),
+            "every saved completion status must preserve the separate evidence warning");
+
 
     var outputLimitedCompletion = completed.Completion! with
     {
@@ -2651,7 +2664,7 @@ static void ArenaSessionMutationCoordinatorCreatesSafetyCheckpointBeforeReset()
         Require(!completion.EventRecorded
                 && refreshCalls == 1
                 && refreshOutcome == completion.Outcome
-                && completion.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                && completion.Outcome.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                 && completion.Outcome.Contains("AA-ARENA-IO", StringComparison.Ordinal)
                 && !completion.Outcome.Contains(events.EventPath(sessionId), StringComparison.OrdinalIgnoreCase),
             "a locked event file should report a safe secondary evidence warning without suppressing the committed reset refresh");
@@ -2704,7 +2717,7 @@ static void ArenaSessionMutationCoordinatorCreatesSafetyCheckpointBeforeReset()
                 && projectionFailureCalls == 1
                 && projectionFailure.EventRecorded
                 && projectionFailure.Outcome.Contains("Arena reset", StringComparison.Ordinal)
-                && projectionFailure.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                && projectionFailure.Outcome.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                 && projectionFailure.Outcome.Contains("AA-ARENA-IO", StringComparison.Ordinal)
                 && !projectionFailure.Outcome.Contains("private", StringComparison.OrdinalIgnoreCase),
             "an arena projection fault misreported or disclosed a committed reset");
@@ -4526,8 +4539,10 @@ static void ReleaseScriptsProtectInstallerDistributions()
         && sanityScript.Contains("Test-AIArenaReleaseVerificationReceipt", StringComparison.Ordinal)
         && releaseSecurityScript.Contains("trusted-local-release-account", StringComparison.Ordinal), "installer releases should reuse only an ephemeral-key-authenticated receipt causally produced by successful harness processes within the trusted local release account");
     Require(sanityScript.Contains("without the pipeline-internal", StringComparison.Ordinal)
-        && sanityScript.Contains("dotnet run --project $coreTests", StringComparison.Ordinal)
-        && sanityScript.Contains("dotnet run --project $wpfTests", StringComparison.Ordinal), "standalone release sanity should rerun both harnesses when no exact receipt is supplied");
+        && sanityScript.Contains("Invoke-AIArenaReleaseVerificationHarnesses", StringComparison.Ordinal)
+        && sanityScript.Contains("-ProjectPath @($coreTests, $wpfTests)", StringComparison.Ordinal)
+        && releaseSecurityScript.Contains("Release verification requires unfiltered test suites", StringComparison.Ordinal),
+        "standalone release sanity must execute both complete harnesses through the shared runner when no exact receipt is supplied");
     Require(Regex.Matches(releaseScript, "Get-AIArenaSha256Entries", RegexOptions.CultureInvariant).Count == 1
         && releaseScript.Contains("Write-AIArenaSha256ManifestEntries", StringComparison.Ordinal)
         && releaseScript.Contains("Checksum inventory SHA256", StringComparison.Ordinal)
@@ -4587,10 +4602,11 @@ static void ReleaseScriptsProtectInstallerDistributions()
     Require(sanityScript.Contains("bundled SearXNG payload", StringComparison.Ordinal) && sanityScript.Contains("arena_searxng_wsgi.py", StringComparison.Ordinal), "release sanity should require the bundled SearXNG payload and JSON API boundary");
     Require(sanityScript.Contains("installed PowerShell control helper", StringComparison.Ordinal), "release sanity should require the installed PowerShell control helper");
     Require(sanityScript.Contains("$xamlBaselineTestExitCode = $LASTEXITCODE", StringComparison.Ordinal) && sanityScript.Contains("XAML hard-coded baseline fixture tests failed with exit code", StringComparison.Ordinal), "release sanity should fail closed when the ratchet fixture script exits non-zero");
-    Require(sanityScript.Contains("-c $Configuration --no-build --no-restore", StringComparison.Ordinal), "release sanity should run harnesses from the already-built validated configuration");
+    Require(sanityScript.Contains("-Configuration $Configuration", StringComparison.Ordinal) && releaseSecurityScript.Contains("'-c', $Configuration, '--no-restore'", StringComparison.Ordinal), "standalone sanity should rebuild and run current harness source in the requested configuration");
     Require(installerScript.Contains("-Configuration $Configuration", StringComparison.Ordinal), "installer final sanity should preserve the requested build configuration");
-    Require(sanityScript.Contains("$coreTestExitCode = $LASTEXITCODE", StringComparison.Ordinal) && sanityScript.Contains("Core console test harness failed with exit code", StringComparison.Ordinal), "release sanity should fail closed when the core console test harness exits non-zero");
-    Require(sanityScript.Contains("$wpfTestExitCode = $LASTEXITCODE", StringComparison.Ordinal) && sanityScript.Contains("WPF console test harness failed with exit code", StringComparison.Ordinal), "release sanity should fail closed when the WPF console test harness exits non-zero");
+    Require(releaseSecurityScript.Contains("$exitCode = $LASTEXITCODE", StringComparison.Ordinal)
+        && releaseSecurityScript.Contains("Release verification harness failed for $relativeProject with exit code", StringComparison.Ordinal),
+        "the shared runner used by release sanity must fail closed when either harness exits non-zero");
     Require(sanityScript.Contains("$gitStatusExitCode = $LASTEXITCODE", StringComparison.Ordinal) && sanityScript.Contains("working-tree status could not be read from git", StringComparison.Ordinal), "release sanity should fail closed when git cannot inspect the source working tree");
     Require(sanityScript.Contains("Payload inventory SHA-256 mismatch", StringComparison.Ordinal) && sanityScript.Contains("Signing policy", StringComparison.OrdinalIgnoreCase), "release sanity should verify payload hashes and signing policy");
     Require(sanityScript.Contains("Get-AIArenaOptionalPropertyValue", StringComparison.Ordinal) && sanityScript.Contains("-DefaultValue $false", StringComparison.Ordinal), "release sanity should default absent legacy signing attestations safely");

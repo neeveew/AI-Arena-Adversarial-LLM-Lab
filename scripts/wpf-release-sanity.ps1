@@ -270,17 +270,10 @@ if (-not [string]::IsNullOrWhiteSpace($VerificationReceiptPath)) {
 else {
     # Standalone sanity remains fail-closed: without the pipeline-internal
     # receipt and its ephemeral key it independently executes both harnesses.
-    dotnet run --project $coreTests -c $Configuration --no-build --no-restore
-    $coreTestExitCode = $LASTEXITCODE
-    if ($coreTestExitCode -ne 0) {
-        throw "Core console test harness failed with exit code $coreTestExitCode."
-    }
-
-    dotnet run --project $wpfTests -c $Configuration --no-build --no-restore
-    $wpfTestExitCode = $LASTEXITCODE
-    if ($wpfTestExitCode -ne 0) {
-        throw "WPF console test harness failed with exit code $wpfTestExitCode."
-    }
+    [void](Invoke-AIArenaReleaseVerificationHarnesses `
+        -RepositoryRoot $Root `
+        -Configuration $Configuration `
+        -ProjectPath @($coreTests, $wpfTests))
 }
 
 $scriptText = Get-Content -LiteralPath $innoScript -Raw

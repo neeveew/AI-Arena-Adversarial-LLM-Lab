@@ -488,14 +488,15 @@ internal sealed class OperatorTurnCoordinator
             factoryConversationService.StampPublicOperator(snapshot, message);
             snapshot.Engine.TurnCount = message.Turn;
             await saveSnapshotWithFeedbackAsync(snapshot, session.Id);
-            committed?.Invoke(new OperatorTurnSendReceipt(session.Id, snapshot.SessionInstanceId, snapshot.Engine.FactoryMode, Completed: false));
-            await eventLogStore.AppendAsync(
-                session.Id,
-                "native_operator_turn_added",
-                new { message.Turn, TextLength = message.Text.Length, Route = "public" });
-            await refreshActiveSessionAsync("Public operator turn added.");
             sent = true;
-            committed?.Invoke(new OperatorTurnSendReceipt(session.Id, snapshot.SessionInstanceId, snapshot.Engine.FactoryMode));
+            var receipt = new OperatorTurnSendReceipt(session.Id, snapshot.SessionInstanceId, snapshot.Engine.FactoryMode, Completed: false);
+            committed?.Invoke(receipt);
+            var presented = await CompleteOperatorSendAsync(
+                session.Id, "native_operator_turn_added",
+                new { message.Turn, TextLength = message.Text.Length, Route = "public" }, "Public operator turn added.");
+            // A saved opening clears its draft, but Send and start may only run
+            // models after the newly saved conversation is visible.
+            if (presented) committed?.Invoke(receipt with { Completed = true });
         }, true);
         return sent;
     }
@@ -616,15 +617,24 @@ internal sealed class OperatorTurnCoordinator
             }
 
             await saveSnapshotWithFeedbackAsync(snapshot, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_operator_private_guidance_added", new
+            sent = true;
+            await CompleteOperatorSendAsync(session.Id, "native_operator_private_guidance_added", new
             {
                 Targets = targets.Select(agent => agent.Id).ToArray(),
                 TextLength = text.Length
-            });
-            await refreshActiveSessionAsync($"Private guidance sent to {FormatOperatorTargetSummary(targets)}.");
-            sent = true;
+            }, $"Private guidance sent to {FormatOperatorTargetSummary(targets)}.");
         }, true);
         return sent;
+    }
+
+    private async Task<bool> CompleteOperatorSendAsync(string sessionId, string eventType, object payload, string outcome)
+    {
+        var evidence = await AppPostCommitEvidence.TryAppendAsync(eventLogStore, sessionId, eventType, payload, AppErrorContext.Arena);
+        var presentation = await AppPostCommitEvidence.RefreshAsync(
+            evidence.AppendTo(outcome), committed: true, refreshActiveSessionAsync, AppErrorContext.Arena);
+        setArenaRunStatus(presentation.Status);
+        setLoadStatus(presentation.Status);
+        return presentation.Complete;
     }
 
     internal Func<ArenaTranscriptStreamCoordinator.StreamOperation?>? BeginTranscriptStream { get; set; }
@@ -636,16 +646,24 @@ internal sealed class OperatorTurnCoordinator
         {
             using var progress = BeginTranscriptStream?.Invoke();
             var result = await narratorService.AskNarratorAsync(session.Id, text, progress: progress);
-            progress?.Flush();
-            var status = result.Ok && result.Message is not null
-                ? $"Narrator answered operator request at turn {result.Message.Turn}."
-                : $"Narrator request failed: {result.Error}";
-            await refreshActiveSessionAsync(status);
-            if (result.Ok && result.Message is not null)
+            sent = result.Ok && result.Message is not null;
+            var status = AppPostCommitEvidence.AppendWarning(sent
+                ? $"Narrator answered operator request at turn {result.Message!.Turn}."
+                : $"Narrator request failed: {result.Error}", result.EvidenceWarning);
+            var presentation = await AppPostCommitEvidence.RefreshAsync(
+                status, result.Message is not null, refreshActiveSessionAsync, AppErrorContext.Arena, () => progress?.Flush());
+            status = presentation.Status;
+            if (sent)
             {
-                speakNarratorMessage(result.Message);
-                sent = true;
+                var voiceWarning = await AppPostCommitEvidence.TryCompleteAsync(() =>
+                {
+                    speakNarratorMessage(result.Message!);
+                    return Task.CompletedTask;
+                }, "voice narration could not be started", AppErrorContext.Arena);
+                status = AppPostCommitEvidence.AppendWarning(status, voiceWarning);
             }
+            setArenaRunStatus(status);
+            setLoadStatus(status);
         }, true);
         return sent;
     }

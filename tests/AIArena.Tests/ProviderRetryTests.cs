@@ -495,6 +495,46 @@ internal static class ProviderRetryTests
                 "LM Studio error followed by read fault received a transport trace");
         }
 
+        foreach (var malformed in new[] { false, true })
+        foreach (var deltas in new string[][] { [], [" \t\r\n "], [" \tprefix", " plus emitted remainder\r\n "] })
+        {
+            const string terminalText = "prefix";
+            var observedText = string.Concat(deltas);
+            var body = string.Concat(deltas.Select(delta => "data: "
+                + JsonSerializer.Serialize(new { type = "message.delta", content = delta }) + "\n\n"));
+            body += malformed
+                ? "data: {not-json}\n\n"
+                : "data: {\"type\":\"error\",\"error\":{\"message\":\"maximum context length exceeded\"}}\n\n";
+            body += "data: " + JsonSerializer.Serialize(new
+            {
+                type = "chat.end",
+                result = new
+                {
+                    model_instance_id = "retry-model",
+                    finish_reason = "max_output_tokens",
+                    output = new[] { new { type = "message", content = terminalText } },
+                    stats = new { input_tokens = 3, total_output_tokens = 2 }
+                }
+            }) + "\n\n";
+            var observer = new RecordingObserver();
+            var progress = new InlineProgress();
+            using var handler = new SequenceHandler((_, _, _) => Task.FromResult(Response(
+                HttpStatusCode.OK, body, "text/event-stream")));
+            var result = CreateClient(handler, observer).CompleteChatStreamingAsync(
+                Config(ModelProviderApiModes.LmStudioNative), Messages, progress).GetAwaiter().GetResult();
+            var expectedText = string.IsNullOrWhiteSpace(observedText) ? terminalText : observedText;
+            Require(result.Text == expectedText && progress.Values.SequenceEqual(deltas),
+                $"LM Studio {(malformed ? "malformed-event" : "error-event")} completion replaced already emitted public text with a conflicting terminal body or lost its terminal-only fallback");
+            Require(!result.Ok && result.StopReason == ModelCompletionStopReason.ProviderError
+                    && result.FailureKind == (malformed ? ModelCompletionFailureKind.InvalidResponse : ModelCompletionFailureKind.ContextLimitExceeded)
+                    && result.ProviderStopReason == "max_output_tokens"
+                    && result.PromptTokens == 3 && result.CompletionTokens == 2 && result.TotalTokens == 5,
+                "retaining emitted output must preserve failure classification and terminal usage/stop evidence");
+            Require(handler.Calls == 1 && observer.Requests.Count == 1 && observer.Completions.Count == 1
+                    && observer.Completions[0].Outcome == "provider_stream_error",
+                "a failed accepted native stream must close one physical attempt without replay");
+        }
+
         {
             var observer = new RecordingObserver();
             var bytes = Encoding.UTF8.GetBytes(

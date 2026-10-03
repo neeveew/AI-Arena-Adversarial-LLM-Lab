@@ -159,7 +159,7 @@ internal static partial class Program
                         && !deleted.EventRecorded
                         && deleteRefreshCalls == 1
                         && !File.Exists(checkpoint.Path)
-                        && deleted.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                        && deleted.Outcome.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                         && deleted.Outcome.Contains("AA-SAVED-", StringComparison.Ordinal)
                         && !deleted.Outcome.Contains(eventPath, StringComparison.OrdinalIgnoreCase),
                     "locked evidence made a committed checkpoint delete fail, stale, or disclose its path");
@@ -200,7 +200,7 @@ internal static partial class Program
                         && checkpointRefreshCalls == 1
                         && checkpointRehydrateCalls == 1
                         && File.Exists(checkpoint.Path)
-                        && checkpointUndo.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase),
+                        && checkpointUndo.Outcome.Contains("change was saved", StringComparison.OrdinalIgnoreCase),
                     "locked evidence made committed checkpoint Undo disappear from UI completion");
             }
 
@@ -241,7 +241,7 @@ internal static partial class Program
                         && !sessionUndo.EventRecorded
                         && sessionRefreshCalls == 1
                         && sessionRehydrateCalls == 1
-                        && sessionUndo.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                        && sessionUndo.Outcome.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                         && !sessionUndo.Outcome.Contains(sessionEventPath, StringComparison.OrdinalIgnoreCase),
                     "locked evidence surfaced a failure or stale UI after committed session Undo");
             }
@@ -266,7 +266,7 @@ internal static partial class Program
                 ?? throw new InvalidOperationException("projection-failure session did not enter Trash");
             Require(!File.Exists(store.SnapshotPath(projectionFailureSession))
                     && sessionTrash.Outcome.Contains("Moved session", StringComparison.Ordinal)
-                    && sessionTrash.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                    && sessionTrash.Outcome.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                     && sessionTrash.Outcome.Contains("AA-SAVED-IO", StringComparison.Ordinal)
                     && !sessionTrash.Outcome.Contains("private", StringComparison.OrdinalIgnoreCase),
                 "a session-list projection fault misreported or disclosed a committed session Trash move");
@@ -313,7 +313,7 @@ internal static partial class Program
                         && templateRefreshCalls == 1
                         && File.Exists(templateCompletion.SafetyCheckpoint.Checkpoint.Path)
                         && templateCompletion.Outcome.Contains("Loaded template", StringComparison.Ordinal)
-                        && templateCompletion.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                        && templateCompletion.Outcome.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                         && !templateCompletion.Outcome.Contains(eventPath, StringComparison.OrdinalIgnoreCase),
                     "locked evidence misreported committed template apply or suppressed its safety/UI receipt");
             }
@@ -588,7 +588,7 @@ internal static partial class Program
                     });
                 Require(checkpointUndo?.Restore.Restored == true
                         && File.Exists(checkpoint.Path)
-                        && checkpointUndoOutcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                        && checkpointUndoOutcome.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                         && checkpointUndoOutcome.Contains("AA-SAVED-IO", StringComparison.Ordinal),
                     "checkpoint Undo warning lost committed truth or its coded projection warning");
 

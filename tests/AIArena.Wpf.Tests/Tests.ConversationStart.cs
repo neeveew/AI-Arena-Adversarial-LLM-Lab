@@ -102,13 +102,15 @@ internal static partial class Program
 
         WithConversationStarter(async fixture =>
         {
-            fixture.Text.Text = "retain after completion failure";
+            fixture.Text.Text = "saved before completion failure";
             fixture.AfterRefresh = () => throw new IOException("fixture completion failed");
             await fixture.Starter.SendAndStartAsync();
             Require(fixture.Starts == 0 && fixture.Load().Engine.Messages.Count == 1
-                    && fixture.Text.Text == "retain after completion failure"
-                    && fixture.Status.Contains("fixture completion failed", StringComparison.Ordinal),
-                "A post-commit completion failure must never start Auto Chat or falsely clear the draft.");
+                    && fixture.Text.Text.Length == 0
+                    && fixture.Status.Contains("Warning:", StringComparison.Ordinal)
+                    && fixture.Status.Contains("AA-ARENA-IO", StringComparison.Ordinal)
+                    && !fixture.Status.Contains("fixture completion failed", StringComparison.Ordinal),
+                "A saved opening clears its unchanged draft, reports a safe refresh warning, and never starts Auto Chat before presentation completes.");
         });
 
         WithConversationStarter(async fixture =>

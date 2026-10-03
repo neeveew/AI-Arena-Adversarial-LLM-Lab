@@ -887,7 +887,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             ResourceBrush,
             RunArenaBusyForCoordinatorAsync,
             SaveSnapshotForCoordinatorAsync,
-            RefreshActiveSessionForCoordinatorAsync,
+            RefreshActiveSessionAfterTurnAsync,
             SetLoadStatus,
             SetArenaRunStatus,
             SpeakNarratorMessage,
@@ -991,7 +991,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             AutoChatCadence,
             SetArenaBusy,
             RunArenaBusyForCoordinatorAsync,
-            RefreshActiveSessionForCoordinatorAsync,
+            RefreshActiveSessionAfterTurnAsync,
             SetLoadStatus,
             SetArenaRunStatus,
             IsAgentSpeaker,
@@ -2566,7 +2566,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         catch (Exception exception) { PublishSessionListFailure(request, exception); }
     }
 
-    private async Task<bool> LoadSessionsCoreAsync(string? preferredSessionId, SessionLoadLease request)
+    private async Task<bool> LoadSessionsCoreAsync(string? preferredSessionId, SessionLoadLease request, bool propagateFailure = false)
     {
         var cancellationToken = request.Token;
         var sessions = await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Messages, cancellationToken);
@@ -2601,7 +2601,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             });
             return request.IsCurrent;
         }
-        var loaded = await LoadSessionCoreAsync(defaultSession, request);
+        var loaded = await LoadSessionCoreAsync(defaultSession, request, propagateFailure);
         request.TryApply(defaultSession.Id, () =>
         {
             var loadOutcome = LoadStatus.Text;
@@ -3869,7 +3869,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             return new(false, "load_failed", "The session snapshot could not be loaded.");
         }
     }
-    private async Task<bool> LoadSessionCoreAsync(CoreSessionSummary session, SessionLoadLease request)
+    private async Task<bool> LoadSessionCoreAsync(CoreSessionSummary session, SessionLoadLease request, bool propagateFailure = false)
     {
         if (!request.IsCurrent) return false;
         var connectionSessionChanged = IsGenuineSessionChange(_activeSession?.Id, session.Id);
@@ -3940,6 +3940,14 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         catch (OperationCanceledException) when (request.Token.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
+            // A committed-turn caller owns truthful saved-with-warning status.
+            // Keep the last good transcript rather than replacing it with fallback UI.
+            if (propagateFailure)
+            {
+                request.Token.ThrowIfCancellationRequested();
+                if (!request.IsCurrent) return false;
+                throw;
+            }
             loadedSuccessfully = false;
             var presentation = AppErrorPresenter.Present(exception, AppErrorContext.SavedState);
             if (!request.TryApply(session.Id, () =>
@@ -4215,7 +4223,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         await RunArenaBusyAsync("Generating decision card...", null, async () =>
         {
             var result = await _narratorService.GenerateDecisionCardAsync(_activeSession.Id);
-            await RefreshActiveSessionAsync(result.Ok ? "Decision card updated." : $"Decision card failed: {result.Error}");
+            var status = AppPostCommitEvidence.AppendWarning(
+                result.Ok ? "Decision card updated." : $"Decision card failed: {result.Error}", result.EvidenceWarning);
+            var presentation = await AppPostCommitEvidence.RefreshAsync(
+                status, result.Committed, RefreshActiveSessionAfterTurnAsync, AppErrorContext.Arena);
+            ArenaRunStatus.Text = LoadStatus.Text = presentation.Status;
         }, allowDuringAutoChat: true);
     }
 
@@ -5843,6 +5855,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         return RefreshActiveSessionAsync(status);
     }
 
+    private Task RefreshActiveSessionAfterTurnAsync(string status) =>
+        RefreshActiveSessionAsync(status, CancellationToken.None, propagateFailure: true);
+
     private Task RefreshActiveSessionForProviderAsync(string status, CancellationToken cancellationToken)
     {
         return RefreshActiveSessionAsync(status, cancellationToken);
@@ -5943,7 +5958,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private async Task RefreshActiveSessionAsync(
         string status,
         CancellationToken cancellationToken = default,
-        bool setArenaStatus = true)
+        bool setArenaStatus = true,
+        bool propagateFailure = false)
     {
         var session = _activeSession;
         if (session is null || _shutdownInProgress || _shutdownReady) return;
@@ -5955,8 +5971,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             var observed = _snapshotStamps.Capture(session.SnapshotPath,
                 () => _coreSessionStore.SnapshotMutationGeneration(session.Id), request.Token);
             var loaded = observed is { } stamp
-                ? await LoadSessionCoreAsync(session with { LastModified = stamp.LastWriteTimeUtc, HasSnapshot = true }, request)
-                : await LoadSessionsCoreAsync(session.Id, request);
+                ? await LoadSessionCoreAsync(session with { LastModified = stamp.LastWriteTimeUtc, HasSnapshot = true }, request, propagateFailure)
+                : await LoadSessionsCoreAsync(session.Id, request, propagateFailure);
             if (loaded && request.IsCurrent && string.Equals(_activeSession?.Id, session.Id, StringComparison.Ordinal))
             {
                 LoadStatus.Text = status;
@@ -5967,7 +5983,18 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         {
             cancellationToken.ThrowIfCancellationRequested();
         }
-        catch (Exception exception) { PublishSessionListFailure(request, exception); }
+        catch (Exception exception)
+        {
+            if (propagateFailure)
+            {
+                // Only the current refresh may warn its caller. A superseded
+                // read can fail with an I/O error instead of cancellation.
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!request.IsCurrent) return;
+                throw;
+            }
+            PublishSessionListFailure(request, exception);
+        }
     }
 
     private Task RefreshActiveSessionForTranscriptMutationAsync(string status) =>

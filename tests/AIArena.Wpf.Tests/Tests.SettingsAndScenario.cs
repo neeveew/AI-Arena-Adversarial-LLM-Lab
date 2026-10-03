@@ -1044,7 +1044,7 @@ static void SavedStateWorkflowIgnoresStaleCheckpointRefresh()
                 && checkpointRefreshCalls == 1
                 && selectedCheckpointId == restoreTarget.Id
                 && activeRefreshOutcome == restoreCompletion.Outcome
-                && restoreCompletion.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                && restoreCompletion.Outcome.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                 && restoreCompletion.Outcome.Contains("AA-SAVED-IO", StringComparison.Ordinal)
                 && !restoreCompletion.Outcome.Contains(events.EventPath(sessionId), StringComparison.OrdinalIgnoreCase),
             "a locked event file should leave the restored UI state committed, publish a safe warning, and run both refreshes");

@@ -211,6 +211,292 @@ internal static partial class Program
         }
     }
 
+    static void ArenaRunCommittedOutcomesSurvivePresentationFailures() =>
+        RunStaTest(() => RunExperimentDispatcherTask(async () =>
+        {
+            foreach (var route in new[] { "one", "agent", "retry", "narrator", "auto" })
+            foreach (var fault in new[] { "cancel", "refresh", "refreshCanceled", "evidence", "precommit" })
+            {
+                if (route == "auto" && fault == "precommit") continue;
+                await RunCommittedOutcomeFixtureAsync(route, fault);
+            }
+            var refreshes = 0;
+            var presentation = await AppPostCommitEvidence.RefreshAsync(
+                "Saved turn.", true, _ => { refreshes++; return Task.CompletedTask; }, AppErrorContext.Arena,
+                () => throw new IOException("private-preview-detail"));
+            Require(refreshes == 1 && !presentation.Complete
+                    && presentation.Status.StartsWith("Saved turn. Warning:", StringComparison.Ordinal)
+                    && !presentation.Status.Contains("private-preview-detail", StringComparison.Ordinal)
+                    && !presentation.Status.Contains("retry", StringComparison.OrdinalIgnoreCase),
+                "a failed postcommit preview must still refresh the saved result, with a warning rather than advice to retry the turn");
+        }));
+
+    private static async Task RunCommittedOutcomeFixtureAsync(string route, string fault)
+    {
+        var fixtureRoot = Path.Combine(Path.GetTempPath(), "ai-arena-committed-ui", Guid.NewGuid().ToString("N"));
+        using var cancellation = new CancellationTokenSource();
+        var statusDescriptor = DependencyPropertyDescriptor.FromProperty(TextBlock.TextProperty, typeof(TextBlock));
+        TranscriptCardRenderer.LiveCard? live = null;
+        EventHandler? statusChanged = null;
+        ArenaTranscriptStreamCoordinator? streams = null;
+        try
+        {
+            var store = new SessionStore(fixtureRoot);
+            var eventLog = new EventLogStore(fixtureRoot);
+            var snapshot = SessionStore.CreateDefaultSnapshot();
+            snapshot.Engine.Internet.UseInternet = false;
+            snapshot.Configs["shared"] = new ModelProviderConfig
+            {
+                Model = "committed-ui-model", BaseUrl = "http://127.0.0.1:45678/v1",
+                ApiMode = ModelProviderApiModes.OpenAiCompatible, MaxOutputTokens = 256
+            };
+            await store.SaveSnapshotAsync(snapshot);
+            var provider = new CommittedOutcomeModelClient();
+            using var internet = new InternetToolService(eventLogStore: eventLog);
+            var transcript = new TranscriptService();
+            var runner = new TurnRunnerService(provider, store, eventLog, transcript, internet);
+            using var narrator = new NarratorService(provider, store, eventLog, transcript, internet);
+            using var gate = new SemaphoreSlim(1, 1);
+            if (route == "retry") await runner.RunOneTurnAsync("default");
+            snapshot = (await store.LoadSnapshotAsync())!;
+            var priorCount = snapshot.Engine.Messages.Count;
+            var session = new CoreSessionSummary("default", store.SnapshotPath("default"), true, priorCount, 0, 0, DateTimeOffset.UtcNow);
+            var view = SnapshotViewMapper.FromCore(session, snapshot);
+            var refreshes = 0;
+            var refreshedMessageCount = -1;
+            var voiceCalls = 0;
+            var statuses = new List<string>();
+            var busy = false;
+            ArenaRunCoordinator coordinator = null!;
+            streams = new ArenaTranscriptStreamCoordinator(
+                Dispatcher.CurrentDispatcher, () => (view.SessionId, view.SessionInstanceId),
+                message =>
+                {
+                    live = CreateTranscriptCardRendererForTest().CreateLiveCard(message);
+                    statusChanged = (_, _) =>
+                    {
+                        if (live.Status.Text != "Complete" || fault != "cancel") return;
+                        if (route == "auto") coordinator.StopAutoChat();
+                        else cancellation.Cancel();
+                    };
+                    statusDescriptor.AddValueChanged(live.Status, statusChanged);
+                    return live;
+                }, () => { });
+            coordinator = new ArenaRunCoordinator(
+                runner, narrator, gate, new Button(), new Button(), new Button(),
+                () => session, () => busy, () => false, () => TimeSpan.Zero,
+                (value, status, _, _) => { busy = value; statuses.Add(status); },
+                async (_, _, action, _) => { await action(); return true; },
+                async _ =>
+                {
+                    refreshes++;
+                    if (fault == "refresh") throw new IOException("private-refresh-detail");
+                    if (fault == "refreshCanceled") throw new OperationCanceledException("private-refresh-detail");
+                    var saved = (await store.LoadSnapshotAsync())!;
+                    refreshedMessageCount = saved.Engine.Messages.Count;
+                    if (route == "auto") coordinator.StopAutoChat();
+                }, statuses.Add, statuses.Add, id => id == "alpha", _ => voiceCalls++,
+                runCancelableArenaBusyAsync: async (_, _, action, _) =>
+                {
+                    busy = true;
+                    try { await action(cancellation.Token); return true; }
+                    catch (OperationCanceledException) { statuses.Add("Operation cancelled."); return true; }
+                    finally { busy = false; }
+                })
+            {
+                BeginTranscriptStream = streams.Begin
+            };
+            if (fault == "evidence") provider.BeforeCompletion = () =>
+            {
+                var eventPath = eventLog.EventPath("default");
+                if (File.Exists(eventPath)) File.Delete(eventPath);
+                Directory.CreateDirectory(eventPath);
+            };
+            if (fault == "precommit") cancellation.Cancel();
+            var callsBefore = provider.Calls;
+            switch (route)
+            {
+                case "one": await coordinator.RunOneTurnAsync(); break;
+                case "agent": await coordinator.RunAgentTurnAsync(view.Agents.First(agent => agent.Id == "alpha")); break;
+                case "retry": await coordinator.RetryTranscriptMessageAsync(view.Messages.Single()); break;
+                case "narrator": await coordinator.NarrateNowAsync(); break;
+                case "auto": await coordinator.StartAutoChatAsync(); break;
+            }
+            var committed = (await store.LoadSnapshotAsync())!;
+            var expectedCount = fault == "precommit" || route == "retry" ? priorCount : priorCount + 1;
+            Require(committed.Engine.Messages.Count == expectedCount && !busy && !coordinator.IsAutoChatRunning,
+                $"{route}/{fault}: saved response count or terminal busy state was wrong");
+            if (fault == "precommit")
+            {
+                Require(refreshes == 0 && provider.Calls == callsBefore && !coordinator.LastTurnSucceeded
+                        && !coordinator.LastNarrationSucceeded && statuses.Last() == "Operation cancelled.",
+                    $"{route}: precommit cancellation was reported as committed or invoked the provider");
+                return;
+            }
+            Require(provider.Calls == callsBefore + 1 && refreshes == 1,
+                $"{route}/{fault}: completion skipped refresh or Auto Chat started another turn after projection failure/stop");
+            Require(committed.Engine.Messages.Last().Text == CommittedOutcomeModelClient.Reply
+                    && committed.Engine.Messages.All(message => message.Status != "error"),
+                $"{route}/{fault}: a saved model response became an error or lost its body");
+            Require(route != "one" || coordinator.LastTurnSucceeded, "a saved one-turn result lost its success receipt");
+            Require(route != "narrator" || coordinator.LastNarrationSucceeded && voiceCalls == 1,
+                "a saved narration lost its success receipt or optional voice callback");
+            Require(!statuses.Last().Contains("private-refresh-detail", StringComparison.Ordinal)
+                    && !statuses.Last().Contains("Operation cancelled", StringComparison.Ordinal)
+                    && !statuses.Last().Contains("failed:", StringComparison.OrdinalIgnoreCase),
+                $"{route}/{fault}: completion was relabeled failed/canceled or exposed private exception text");
+            if (fault is "refresh" or "refreshCanceled")
+                Require(statuses.Last().Contains("Warning:", StringComparison.Ordinal)
+                        && statuses.Last().Contains("AA-ARENA-", StringComparison.Ordinal),
+                    $"{route}/{fault}: a failed postcommit refresh did not produce a coded warning");
+            else
+                Require(refreshedMessageCount == expectedCount,
+                    $"{route}/{fault}: the durable response was not reloaded after completion");
+            if (fault == "evidence")
+                Require(statuses.Last().Contains("activity-log", StringComparison.Ordinal),
+                    $"{route}: missing completion-log evidence was hidden from the saved result status");
+            if (fault == "cancel" && route != "auto") Require(cancellation.IsCancellationRequested,
+                $"{route}: fixture did not cancel when the committed stream completed");
+        }
+        finally
+        {
+            if (live is not null && statusChanged is not null)
+                statusDescriptor.RemoveValueChanged(live.Status, statusChanged);
+            streams?.Clear();
+            DeleteCommittedOutcomeFixture(fixtureRoot, "ai-arena-committed-ui");
+        }
+    }
+
+    static void OperatorCommittedSendsClearDraftDespiteSecondaryFailures() =>
+        RunStaTest(() => RunExperimentDispatcherTask(async () =>
+        {
+            foreach (var route in new[] { "narrator", "public", "private", "opening" })
+            foreach (var fault in new[] { "evidence", "refresh", "voice", "precommit" })
+            {
+                if (fault == "voice" && route != "narrator") continue;
+                var fixtureRoot = Path.Combine(Path.GetTempPath(), "ai-arena-operator-ui", Guid.NewGuid().ToString("N"));
+                try
+                {
+                    var store = new SessionStore(fixtureRoot);
+                    var events = new EventLogStore(fixtureRoot);
+                    var snapshot = SessionStore.CreateDefaultSnapshot();
+                    snapshot.Engine.Internet.UseInternet = false;
+                    snapshot.Engine.FactoryMode = route == "opening";
+                    snapshot.Configs["shared"] = new ModelProviderConfig
+                    {
+                        Model = "committed-ui-model", BaseUrl = "http://127.0.0.1:45678/v1",
+                        ApiMode = ModelProviderApiModes.OpenAiCompatible
+                    };
+                    await store.SaveSnapshotAsync(snapshot);
+                    snapshot = (await store.LoadSnapshotAsync())!;
+                    var session = new CoreSessionSummary("default", store.SnapshotPath("default"), true, 0, 0, 0, DateTimeOffset.UtcNow);
+                    var view = SnapshotViewMapper.FromCore(session, snapshot);
+                    var provider = new CommittedOutcomeModelClient();
+                    using var narrator = new NarratorService(provider, store, events);
+                    var text = new TextBox();
+                    var statuses = new List<string>();
+                    var refreshes = 0;
+                    void BlockEventLog()
+                    {
+                        var path = events.EventPath("default");
+                        if (File.Exists(path)) File.Delete(path);
+                        Directory.CreateDirectory(path);
+                    }
+                    var coordinator = new OperatorTurnCoordinator(
+                        store, events, new TranscriptService(), narrator, new DiscourseDiagnosticsService(),
+                        new WpfSettingsStore(Path.Combine(fixtureRoot, "settings.json")),
+                        new Button(), new Button(), new Button(), new Grid(), new ComboBox(),
+                        new TextBlock(), new TextBlock(), new TextBlock(), new TextBlock(),
+                        [new Button(), new Button(), new Button(), new Button()], new ComboBox(),
+                        new Button(), new Button(), new Button(), text, new Button(),
+                        () => new WpfSettings { OperatorTemplates = [] }, () => session, () => view, () => false,
+                        AccentResourceBrush,
+                        async (_, _, action, _) =>
+                        {
+                            try { await action(); }
+                            catch (OperationCanceledException) { statuses.Add("Operation cancelled."); }
+                        },
+                        async (saved, id) =>
+                        {
+                            if (fault == "precommit") throw new OperationCanceledException();
+                            await store.SaveSnapshotAsync(saved, id);
+                            if (fault == "evidence") BlockEventLog();
+                        },
+                        _ =>
+                        {
+                            refreshes++;
+                            return fault == "refresh" ? Task.FromException(new IOException("private-refresh-detail")) : Task.CompletedTask;
+                        }, statuses.Add, statuses.Add,
+                        _ => { if (fault == "voice") throw new IOException("private-voice-detail"); });
+                    coordinator.InitializeControls();
+                    coordinator.ApplySnapshot(view);
+                    coordinator.SetRouteMode(route == "opening" ? "public" : route);
+                    text.Text = "My operator request";
+                    coordinator.UpdateTurnMeter();
+                    provider.BeforeCompletion = () =>
+                    {
+                        if (fault == "precommit") throw new OperationCanceledException();
+                        if (fault == "evidence") BlockEventLog();
+                    };
+                    OperatorTurnSendReceipt? receipt = null;
+                    if (route == "opening") receipt = await coordinator.SendConversationStartAsync(view.SessionId, view.SessionInstanceId);
+                    else await coordinator.SendOperatorTurnAsync();
+                    var saved = (await store.LoadSnapshotAsync())!;
+                    if (fault == "precommit")
+                        Require(text.Text == "My operator request" && saved.Engine.Messages.Count == 0 && refreshes == 0
+                                && saved.Engine.Agents.All(agent => agent.PrivateNotes.Count == 0) && receipt is null,
+                            $"{route}: precommit cancellation cleared a draft or pretended a send was saved");
+                    else
+                    {
+                        Require(text.Text.Length == 0 && refreshes == 1
+                                && statuses.Last().Contains("Warning:", StringComparison.Ordinal)
+                                && !statuses.Last().Contains("private-", StringComparison.Ordinal)
+                                && !statuses.Last().Contains("retry", StringComparison.OrdinalIgnoreCase),
+                            $"{route}/{fault}: a saved send must clear its draft and retain a privacy-safe warning without retry advice");
+                        if (route == "private")
+                            Require(saved.Engine.Messages.Count == 0 && saved.Engine.Agents.Where(agent => agent.Active)
+                                    .All(agent => agent.PrivateNotes.Contains("Operator private: My operator request")),
+                                $"{route}/{fault}: private guidance was not durably saved");
+                        else
+                            Require(saved.Engine.Messages.Single().Text == (route == "narrator" ? CommittedOutcomeModelClient.Reply : "My operator request"),
+                                $"{route}/{fault}: saved message was missing or duplicated");
+                        if (route == "opening")
+                            Require(receipt is not null && receipt.Completed == (fault != "refresh"),
+                                "Send and start requires a refreshed opening; failed presentation must retain a saved but incomplete receipt");
+                    }
+                }
+                finally { DeleteCommittedOutcomeFixture(fixtureRoot, "ai-arena-operator-ui"); }
+            }
+        }));
+
+    private sealed class CommittedOutcomeModelClient : IModelProviderClient
+    {
+        internal const string Reply = "A useful next step is to test the assumption and compare the evidence.";
+        internal Action? BeforeCompletion { get; set; }
+        internal int Calls { get; private set; }
+        public Task<ModelProviderModels> ListModelsAsync(ModelProviderConfig config, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ModelProviderModels(true, config.BaseUrl, [config.Model], "", DateTimeOffset.Now));
+        public Task<ModelCompletionResult> CompleteChatAsync(
+            ModelProviderConfig config, IReadOnlyList<ModelChatMessage> messages, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Calls++;
+            BeforeCompletion?.Invoke();
+            return Task.FromResult(new ModelCompletionResult(true, config.BaseUrl, config.Model, Reply, "", 1,
+                0, 0, 0, "", DateTimeOffset.Now, StopReason: ModelCompletionStopReason.Completed));
+        }
+    }
+
+    private static void DeleteCommittedOutcomeFixture(string fixtureRoot, string parentName)
+    {
+        var root = Path.GetFullPath(fixtureRoot);
+        var expectedParent = Path.GetFullPath(Path.Combine(Path.GetTempPath(), parentName));
+        if (!string.Equals(Path.GetDirectoryName(root), expectedParent, StringComparison.OrdinalIgnoreCase)
+            || !Guid.TryParseExact(Path.GetFileName(root), "N", out _))
+            throw new InvalidOperationException("Refusing to clean up a fixture outside its temporary parent.");
+        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+    }
+
     private static void CaptureArenaStreamingPreview(Window window, string filename)
     {
         var outputDirectory = Environment.GetEnvironmentVariable("AIARENA_STREAM_PREVIEW_DIR");

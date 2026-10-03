@@ -107,20 +107,25 @@ internal sealed class ArenaRunCoordinator
             {
                 await arenaOperationLock.WaitAsync(token);
                 OneTurnResult result;
+                (string Status, bool Complete) presentation;
                 try
                 {
                     using var progress = BeginTranscriptStream?.Invoke();
                     result = await turnRunner.RunOneTurnAsync(session.Id, shouldEnforceVoiceDrift(), token, progress);
-                    progress?.Flush();
+                    presentation = await CompletePresentationAsync(AutoChatStatus(result), result.Executed, progress);
+                    finalStatus = presentation.Status;
                 }
                 finally
                 {
                     arenaOperationLock.Release();
                 }
 
-                var status = AutoChatStatus(result);
-                finalStatus = status;
-                await refreshActiveSessionAsync(status);
+                if (token.IsCancellationRequested || !presentation.Complete)
+                {
+                    finalStatus = $"Auto Chat stopped. {finalStatus}";
+                    SetBothStatuses(finalStatus);
+                    break;
+                }
                 if (!ShouldContinueAutoChat(result))
                 {
                     break;
@@ -219,14 +224,17 @@ internal sealed class ArenaRunCoordinator
         {
             using var progress = BeginTranscriptStream?.Invoke();
             var result = await narratorService.NarrateNowAsync(session.Id, cancellationToken, progress);
-            progress?.Flush();
-            cancellationToken.ThrowIfCancellationRequested();
+            if (result.Message is null) cancellationToken.ThrowIfCancellationRequested();
             LastNarrationSucceeded = result.Ok && result.Message is not null;
-            var status = NarratorStatus(result);
-            await refreshActiveSessionAsync(status);
-            if (result.Ok && result.Message is not null)
+            var presentation = await CompletePresentationAsync(NarratorStatus(result), result.Message is not null, progress);
+            if (LastNarrationSucceeded)
             {
-                speakNarratorMessage(result.Message);
+                var voiceWarning = await AppPostCommitEvidence.TryCompleteAsync(() =>
+                {
+                    speakNarratorMessage(result.Message!);
+                    return Task.CompletedTask;
+                }, "voice narration could not be started", AppErrorContext.Arena);
+                SetBothStatuses(AppPostCommitEvidence.AppendWarning(presentation.Status, voiceWarning));
             }
         }, true);
 
@@ -256,12 +264,9 @@ internal sealed class ArenaRunCoordinator
         {
             using var progress = BeginTranscriptStream?.Invoke();
             var result = await turnRunner.RunOneTurnAsync(session.Id, shouldEnforceVoiceDrift(), cancellationToken, progress);
-            progress?.Flush();
-            cancellationToken.ThrowIfCancellationRequested();
+            if (!result.Executed) cancellationToken.ThrowIfCancellationRequested();
             LastTurnSucceeded = ModelTurnSucceeded(result);
-            var status = OneTurnStatus(result);
-            await refreshActiveSessionAsync(status);
-            SetBothStatuses(status);
+            await CompletePresentationAsync(OneTurnStatus(result), result.Executed, progress);
         }, false);
 
         if (ran)
@@ -285,9 +290,8 @@ internal sealed class ArenaRunCoordinator
         {
             using var progress = BeginTranscriptStream?.Invoke();
             var result = await turnRunner.RunAgentTurnAsync(session.Id, agent.Id, shouldEnforceVoiceDrift(), cancellationToken, progress);
-            progress?.Flush();
-            cancellationToken.ThrowIfCancellationRequested();
-            await refreshActiveSessionAsync(AgentTurnStatus(agent, result));
+            if (!result.Executed) cancellationToken.ThrowIfCancellationRequested();
+            await CompletePresentationAsync(AgentTurnStatus(agent, result), result.Executed, progress);
         }, false);
     }
 
@@ -309,66 +313,57 @@ internal sealed class ArenaRunCoordinator
                 message.CreatedAt,
                 shouldEnforceVoiceDrift(),
                 cancellationToken, progress);
-            progress?.Flush();
-            cancellationToken.ThrowIfCancellationRequested();
-            await refreshActiveSessionAsync(RetryStatus(message, result));
+            if (!result.Executed) cancellationToken.ThrowIfCancellationRequested();
+            await CompletePresentationAsync(RetryStatus(message, result), result.Executed, progress);
         }, false);
     }
 
-    internal static string AutoChatStatus(OneTurnResult result)
+    private async Task<(string Status, bool Complete)> CompletePresentationAsync(
+        string status, bool committed, ArenaTranscriptStreamCoordinator.StreamOperation? progress)
     {
-        if (OutputLimitReached(result))
-        {
-            return $"Auto Chat paused: {result.Message!.Speaker} reached the output limit; the partial response was preserved.";
-        }
-
-        return ModelTurnSucceeded(result)
-            ? $"Auto Chat: {result.Message!.Speaker} spoke ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
-            : $"Auto Chat stopped: {TurnFailureDetail(result)}";
+        var presentation = await AppPostCommitEvidence.RefreshAsync(
+            status, committed, refreshActiveSessionAsync, AppErrorContext.Arena, () => progress?.Flush());
+        SetBothStatuses(presentation.Status);
+        return presentation;
     }
 
-    internal static string OneTurnStatus(OneTurnResult result)
-    {
-        if (OutputLimitReached(result))
-        {
-            return $"1 TURN reached the output limit: {result.Message!.Speaker}; the partial response was preserved.";
-        }
+    internal static string AutoChatStatus(OneTurnResult result) => AppPostCommitEvidence.AppendWarning(
+        OutputLimitReached(result)
+            ? $"Auto Chat paused: {result.Message!.Speaker} reached the output limit; the partial response was preserved."
+            : ModelTurnSucceeded(result)
+                ? $"Auto Chat: {result.Message!.Speaker} spoke ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
+                : $"Auto Chat stopped: {TurnFailureDetail(result)}",
+        result.EvidenceWarning);
 
-        return ModelTurnSucceeded(result)
-            ? $"1 TURN complete: {result.Message!.Speaker} ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
-            : $"1 TURN failed: {TurnFailureDetail(result)}";
-    }
+    internal static string OneTurnStatus(OneTurnResult result) => AppPostCommitEvidence.AppendWarning(
+        OutputLimitReached(result)
+            ? $"1 TURN reached the output limit: {result.Message!.Speaker}; the partial response was preserved."
+            : ModelTurnSucceeded(result)
+                ? $"1 TURN complete: {result.Message!.Speaker} ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
+                : $"1 TURN failed: {TurnFailureDetail(result)}",
+        result.EvidenceWarning);
 
-    internal static string NarratorStatus(NarratorResult result)
-    {
-        return result.Ok && result.Message is not null
+    internal static string NarratorStatus(NarratorResult result) => AppPostCommitEvidence.AppendWarning(
+        result.Ok && result.Message is not null
             ? $"Narrator added turn {result.Message.Turn} ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
-            : $"Narrator failed: {result.Error}";
-    }
+            : $"Narrator failed: {result.Error}",
+        result.EvidenceWarning);
 
-    internal static string AgentTurnStatus(AgentState agent, OneTurnResult result)
-    {
-        if (OutputLimitReached(result))
-        {
-            return $"{agent.Name} reached the output limit; the partial response was preserved.";
-        }
+    internal static string AgentTurnStatus(AgentState agent, OneTurnResult result) => AppPostCommitEvidence.AppendWarning(
+        OutputLimitReached(result)
+            ? $"{agent.Name} reached the output limit; the partial response was preserved."
+            : ModelTurnSucceeded(result)
+                ? $"{agent.Name} one-shot complete: {result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms"
+                : $"{agent.Name} one-shot failed: {TurnFailureDetail(result)}",
+        result.EvidenceWarning);
 
-        return ModelTurnSucceeded(result)
-            ? $"{agent.Name} one-shot complete: {result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms"
-            : $"{agent.Name} one-shot failed: {TurnFailureDetail(result)}";
-    }
-
-    internal static string RetryStatus(TranscriptMessage originalMessage, OneTurnResult result)
-    {
-        if (OutputLimitReached(result))
-        {
-            return $"Retry replaced turn {originalMessage.Turn} with a partial response stopped at the output limit.";
-        }
-
-        return ModelTurnSucceeded(result)
-            ? $"Retry replaced turn {originalMessage.Turn}: {result.Message!.Speaker} ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
-            : $"Retry failed: {TurnFailureDetail(result)}";
-    }
+    internal static string RetryStatus(TranscriptMessage originalMessage, OneTurnResult result) => AppPostCommitEvidence.AppendWarning(
+        OutputLimitReached(result)
+            ? $"Retry replaced turn {originalMessage.Turn} with a partial response stopped at the output limit."
+            : ModelTurnSucceeded(result)
+                ? $"Retry replaced turn {originalMessage.Turn}: {result.Message!.Speaker} ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
+                : $"Retry failed: {TurnFailureDetail(result)}",
+        result.EvidenceWarning);
 
     internal static bool ShouldContinueAutoChat(OneTurnResult result) =>
         ModelTurnSucceeded(result) && !OutputLimitReached(result);

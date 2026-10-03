@@ -103,7 +103,7 @@ try {
     $projectText = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>'
     [IO.File]::WriteAllText($coreProject, $projectText, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($wpfProject, $projectText, [Text.UTF8Encoding]::new($false))
-    [IO.File]::WriteAllText((Join-Path (Split-Path -Parent $coreProject) 'Program.cs'), 'return 0;', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path (Split-Path -Parent $coreProject) 'Program.cs'), 'System.IO.File.WriteAllText(System.IO.Path.Combine(System.AppContext.BaseDirectory, "executed.txt"), "executed"); return 0;', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path (Split-Path -Parent $wpfProject) 'Program.cs'), 'return 0;', [Text.UTF8Encoding]::new($false))
     $dotnet = Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1
     foreach ($project in @($coreProject, $wpfProject)) {
@@ -115,6 +115,28 @@ try {
     $receiptPath = Join-Path $fixtureRoot 'release-verification.json'
     $fixtureCommit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     $fixtureTree = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    # A passing subset must never produce full-release evidence or run through
+    # the standalone verification path. Verify this before any harness executes.
+    $previousTestFilter = [Environment]::GetEnvironmentVariable('AIARENA_TEST_FILTER', 'Process')
+    $executionMarker = Join-Path (Split-Path -Parent $coreAssembly) 'executed.txt'
+    try {
+        foreach ($filteredValue in @('passing subset', '  passing subset  ')) {
+            [Environment]::SetEnvironmentVariable('AIARENA_TEST_FILTER', $filteredValue, 'Process')
+            $filteredReceiptPath = Join-Path $fixtureRoot 'filtered-release-verification.json'
+            Require-Throws {
+                Invoke-AIArenaReleaseVerificationHarnesses -RepositoryRoot $receiptRoot -OutputPath $filteredReceiptPath -ReceiptKey (New-AIArenaReleaseVerificationKey) -Configuration Release -ProjectPath @($coreProject) -SourceCommit $fixtureCommit -SourceTree $fixtureTree
+            } 'AIARENA_TEST_FILTER.*unfiltered' 'A filtered test run must not create full-release verification evidence.'
+            Require (-not (Test-Path -LiteralPath $filteredReceiptPath)) 'Filtered verification must leave no receipt.'
+            Require-Throws {
+                Invoke-AIArenaReleaseVerificationHarnesses -RepositoryRoot $receiptRoot -Configuration Release -ProjectPath @($coreProject) -SourceCommit $fixtureCommit -SourceTree $fixtureTree
+            } 'AIARENA_TEST_FILTER.*unfiltered' 'Standalone verification must reject a filtered run too.'
+            Require (-not (Test-Path -LiteralPath $executionMarker)) 'A filtered verification must fail before executing any harness.'
+            Require ([Environment]::GetEnvironmentVariable('AIARENA_TEST_FILTER', 'Process') -eq $filteredValue) 'Rejecting a filter must not change the caller environment.'
+        }
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('AIARENA_TEST_FILTER', $previousTestFilter, 'Process')
+    }
     $receiptKey = New-AIArenaReleaseVerificationKey
     [void](Invoke-AIArenaReleaseVerificationHarnesses `
         -RepositoryRoot $receiptRoot `

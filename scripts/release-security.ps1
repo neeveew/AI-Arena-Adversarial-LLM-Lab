@@ -1027,6 +1027,13 @@ function Invoke-AIArenaReleaseVerificationHarnesses {
         [string]$SourceTree = ''
     )
 
+    # Both receipt-producing builds and standalone verification must execute
+    # complete suites. A developer's inherited filter otherwise yields a valid
+    # zero exit code and an authenticated receipt for only a passing subset.
+    if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('AIARENA_TEST_FILTER', 'Process'))) {
+        throw 'AIARENA_TEST_FILTER is set. Release verification requires unfiltered test suites; clear the filter and retry.'
+    }
+
     $writeReceipt = -not [string]::IsNullOrWhiteSpace($OutputPath)
     if ($writeReceipt -ne (-not [string]::IsNullOrWhiteSpace($ReceiptKey))) {
         throw 'Release-verification receipt output and its ephemeral key must be supplied together.'

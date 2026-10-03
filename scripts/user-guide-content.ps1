@@ -206,12 +206,14 @@ foreach ($group in $orderedGroups) {
     }
 }
 
-$generated = $builder.ToString().TrimEnd() + [Environment]::NewLine
+# Git checkouts may normalize Markdown to LF even on Windows. Generate a
+# canonical form and compare content independently of LF/CRLF checkout policy.
+$generated = ($builder.ToString().TrimEnd() + "`n").Replace("`r`n", "`n")
 
 if ($Check) {
     Assert-Guide (Test-Path -LiteralPath $resolvedOutput -PathType Leaf) "Generated output is missing: $resolvedOutput"
     $current = Get-Content -LiteralPath $resolvedOutput -Raw -Encoding UTF8
-    Assert-Guide ($current -ceq $generated) "Generated output is stale. Run scripts/user-guide-content.ps1 -Write."
+    Assert-Guide ($current.Replace("`r`n", "`n") -ceq $generated) "Generated output is stale. Run scripts/user-guide-content.ps1 -Write."
     Write-Host "User Guide content is valid and synchronized: $($articles.Count) articles, $($groups.Count) groups, $($journeys.Count) journeys."
     exit 0
 }

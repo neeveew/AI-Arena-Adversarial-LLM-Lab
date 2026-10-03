@@ -91,23 +91,13 @@ internal static class AppPostCommitEvidence
         object payload,
         AppErrorContext context)
     {
-        ArgumentNullException.ThrowIfNull(eventLogStore);
-        try
-        {
-            await eventLogStore.AppendAsync(
-                sessionId,
-                eventType,
-                payload,
-                CancellationToken.None);
-            return new AppPostCommitEvidenceResult(true, "", null);
-        }
-        catch (Exception exception)
-        {
-            var presentation = AppErrorPresenter.Present(exception, context);
-            var warning = $"Warning: the change was committed, but activity-log evidence could not be recorded. "
-                + $"{presentation.Action} Code: {presentation.Code}.";
-            return new AppPostCommitEvidenceResult(false, warning, presentation);
-        }
+        var exception = await PostCommitEvidence.TryAppendAsync(eventLogStore, sessionId, eventType, payload);
+        if (exception is null) return new AppPostCommitEvidenceResult(true, "", null);
+
+        var presentation = AppErrorPresenter.Present(exception, context);
+        var warning = $"Warning: the change was saved, but activity-log evidence could not be recorded. "
+            + $"Code: {presentation.Code}.";
+        return new AppPostCommitEvidenceResult(false, warning, presentation);
     }
 
     /// <summary>
@@ -120,18 +110,45 @@ internal static class AppPostCommitEvidence
         string failureSummary,
         AppErrorContext context)
     {
-        ArgumentNullException.ThrowIfNull(completion);
-        try
+        var exception = await PostCommitEvidence.TryCompleteAsync(completion);
+        if (exception is null) return "";
+
+        var presentation = AppErrorPresenter.Present(exception, context);
+        return $"Warning: the change was saved, but {failureSummary}. "
+            + $"Code: {presentation.Code}.";
+    }
+
+    /// <summary>Refreshes a saved outcome even if its optional stream preview fails.</summary>
+    internal static async Task<(string Status, bool Complete)> RefreshAsync(
+        string outcome,
+        bool committed,
+        Func<string, Task> refresh,
+        AppErrorContext context,
+        Action? flushPreview = null)
+    {
+        if (!committed)
         {
-            await completion();
-            return "";
+            flushPreview?.Invoke();
+            await refresh(outcome);
+            return (outcome, true);
         }
-        catch (Exception exception)
+
+        var previewWarning = "";
+        if (flushPreview is not null)
         {
-            var presentation = AppErrorPresenter.Present(exception, context);
-            return $"Warning: the change was committed, but {failureSummary}. "
-                + $"{presentation.Action} Code: {presentation.Code}.";
+            previewWarning = await TryCompleteAsync(() =>
+            {
+                flushPreview();
+                return Task.CompletedTask;
+            }, "the response preview could not be updated", context);
+            outcome = AppendWarning(outcome, previewWarning);
         }
+
+        // The authoritative save has finished. The refresh owns its lifetime;
+        // cancellation of the model call must not hide the committed response.
+        var refreshWarning = await TryCompleteAsync(
+            () => refresh(outcome), "the current view could not be refreshed", context);
+        return (AppendWarning(outcome, refreshWarning), previewWarning.Length == 0 && refreshWarning.Length == 0);
     }
 
     internal static string AppendWarning(string outcome, string warning) =>

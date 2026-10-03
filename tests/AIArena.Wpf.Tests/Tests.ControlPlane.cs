@@ -1355,7 +1355,7 @@ internal static partial class Program
                     && !postCommitRefreshTokenCanBeCanceled
                     && postCommitRefreshCalls == 1
                     && postCommitRefreshOutcome == restored.Message
-                    && restored.Message.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                    && restored.Message.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                     && restored.Message.Contains("AA-SAVED-IO", StringComparison.Ordinal)
                     && !restored.Message.Contains(events.EventPath("powershell-audit"), StringComparison.OrdinalIgnoreCase),
                 "a locked event file should keep control restore successful, refresh once without caller cancellation, and return a safe evidence warning");
@@ -1393,7 +1393,7 @@ internal static partial class Program
                     && projectionRefreshCalls == 1
                     && store.LoadSnapshotAsync("powershell-audit").GetAwaiter().GetResult()?.MatchType
                         != "newer-before-control-projection-failure"
-                    && projectionFailureRestore.Message.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                    && projectionFailureRestore.Message.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                     && projectionFailureRestore.Message.Contains("AA-SAVED-IO", StringComparison.Ordinal)
                     && !projectionFailureRestore.Message.Contains("private", StringComparison.OrdinalIgnoreCase),
                 "control restore projection failure escaped or misreported the committed restore");
@@ -1420,7 +1420,7 @@ internal static partial class Program
                 .GetResult();
             Require(captureCalls == 1
                     && ReferenceEquals(captureFailure.State, captureFallback)
-                    && captureFailure.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                    && captureFailure.Outcome.Contains("change was saved", StringComparison.OrdinalIgnoreCase)
                     && captureFailure.Outcome.Contains("AA-SAVED-IO", StringComparison.Ordinal)
                     && !captureFailure.Outcome.Contains("private", StringComparison.OrdinalIgnoreCase),
                 "control capture failure did not preserve a safe successful fallback after commit");
