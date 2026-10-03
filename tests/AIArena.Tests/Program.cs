@@ -145,6 +145,7 @@ var tests = new List<(string Name, Action Test)>
     ("provider retries buffered and streaming rejections without duplicate progress", ProviderRetryTests.RetriesBufferedAndStreamingRejectionsWithoutDuplicateProgress),
     ("provider retries never replay accepted ambiguous or cancelled attempts", ProviderRetryTests.NeverReplaysAcceptedAmbiguousOrCancelledAttempts),
     ("extracts LM Studio native chat response", ExtractLmStudioNativeChatResponse),
+    ("LM Studio native streaming preserves message boundaries", NativeMessageBoundaryTests.PreservesNativeMessageBoundaries),
     ("runs LM Studio native chat endpoint", RunsLmStudioNativeChatEndpoint),
     ("omits disabled reasoning from LM Studio native chat", OmitsDisabledReasoningFromLmStudioNativeChat),
     ("continues LM Studio native chat by response id", ContinuesLmStudioNativeChatByResponseId),

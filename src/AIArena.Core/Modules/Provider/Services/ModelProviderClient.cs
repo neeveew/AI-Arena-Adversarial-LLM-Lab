@@ -723,6 +723,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                 var reasoning = acceptedReasoning;
                 var resultJson = "";
                 var sawTerminalEvent = false;
+                var messageHasContent = false;
                 await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
                 using var reader = new StreamReader(stream);
                 while (await reader.ReadLineAsync(timeout.Token) is { } line)
@@ -743,14 +744,27 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                         using var doc = JsonDocument.Parse(data);
                         var type = FirstString(doc.RootElement, "type");
                         activity?.NativeStage(type, doc.RootElement);
-                        if (type.Equals("message.delta", StringComparison.OrdinalIgnoreCase))
+                        if (type.Equals("message.start", StringComparison.OrdinalIgnoreCase)
+                            || type.Equals("message.end", StringComparison.OrdinalIgnoreCase))
+                        {
+                            messageHasContent = false;
+                        }
+                        else if (type.Equals("message.delta", StringComparison.OrdinalIgnoreCase))
                         {
                             var delta = FirstString(doc.RootElement, "content");
                             if (delta.Length > 0)
                             {
-                                content.Append(delta);
-                                progress?.Report(delta);
-                                activity?.PublicDelta(delta.Length);
+                                // Match terminal output[] flattening between messages,
+                                // while publishing every within-message fragment intact.
+                                // Empty blocks add no separators; unmarked deltas retain
+                                // the compatible single implicit message behavior.
+                                var publicDelta = !messageHasContent && content.Length > 0
+                                    ? Environment.NewLine + delta
+                                    : delta;
+                                messageHasContent = true;
+                                content.Append(publicDelta);
+                                progress?.Report(publicDelta);
+                                activity?.PublicDelta(publicDelta.Length);
                             }
                         }
                         else if (type.Equals("reasoning.delta", StringComparison.OrdinalIgnoreCase))
@@ -2433,6 +2447,7 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
             return "";
         }
 
+        var preserveWhitespace = type.Equals("message", StringComparison.OrdinalIgnoreCase);
         var parts = new List<string>();
         foreach (var item in output.EnumerateArray())
         {
@@ -2444,22 +2459,22 @@ public class ModelProviderClient : IModelProviderClient, IActivityStreamingModel
                 continue;
             }
 
-            var text = ExtractNativeOutputItemText(item);
-            if (!string.IsNullOrWhiteSpace(text))
+            var text = ExtractNativeOutputItemText(item, preserveWhitespace);
+            if (preserveWhitespace ? text.Length > 0 : !string.IsNullOrWhiteSpace(text))
             {
                 parts.Add(text);
             }
         }
 
-        return string.Join(Environment.NewLine, parts.Where(part => !string.IsNullOrWhiteSpace(part)));
+        return string.Join(Environment.NewLine, parts);
     }
 
-    private static string ExtractNativeOutputItemText(JsonElement item)
+    private static string ExtractNativeOutputItemText(JsonElement item, bool preserveWhitespace)
     {
         if (item.TryGetProperty("content", out var content))
         {
             var text = ExtractNativeTextContent(content);
-            if (!string.IsNullOrWhiteSpace(text))
+            if (preserveWhitespace ? text.Length > 0 : !string.IsNullOrWhiteSpace(text))
             {
                 return text;
             }
