@@ -8,7 +8,7 @@ Bring AI models together to debate ideas, collaborate on answers, and help build
 
 **[Get the Windows installer](https://aiarena.me/downloads/)** · [User guide](docs/USER_GUIDE.md) · [Website](https://aiarena.me/) · [Updates on X](https://x.com/aiarena_me)
 
-Current beta: [Download 0.4.143-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.143-beta) · [Release notes](packaging/changes/0.4.143-beta.txt)
+Current beta: [Download 0.4.144-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.144-beta) · [Release notes](packaging/changes/0.4.144-beta.txt)
 
 ![AI Arena Lite in action: a multi-agent conversation with model responses, turn timings, and token performance](docs/assets/ai-arena-lite-workspace.png)
 

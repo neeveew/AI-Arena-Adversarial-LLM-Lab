@@ -1,0 +1,14 @@
+AI Arena - Lite 0.4.144-beta
+
+Changes since 0.4.143-beta:
+
+- Update the optional bundled SearXNG service's AnyIO dependency from 4.14.1 to the verified 4.14.2 security patch. This addresses the upstream TLS hostname-validation and process-pool stderr advisories without changing the app's model or transcript behavior.
+- Retain strict dependency hashes, the pristine SearXNG source archive, editable gateway and configuration, and third-party licence notices. The pinned upstream requirements remain unchanged because AnyIO is a transitive dependency.
+- Add packaging regression checks for the reviewed AnyIO wheel, upstream requirement coverage, rejection of a stale dependency-lock hash, and the built payload's dependency and source inventory.
+
+Retains the audited installer packaging from 0.4.143-beta and application stability improvements from 0.4.142-beta.
+
+Upstream security references:
+https://github.com/agronholm/anyio/security/advisories/GHSA-82r6-8w77-94w6
+https://github.com/agronholm/anyio/security/advisories/GHSA-5p39-cfhj-2xmp
+https://github.com/agronholm/anyio/security/advisories/GHSA-3w57-8xmc-8v26
