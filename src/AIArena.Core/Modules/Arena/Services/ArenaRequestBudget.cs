@@ -1,4 +1,5 @@
 using AIArena.Core.Models;
+using AIArena.Core.Providers;
 
 namespace AIArena.Core.Services;
 
@@ -55,31 +56,7 @@ internal static class ArenaRequestBudget
     }
 
     internal static ModelProviderConfig Copy(ModelProviderConfig config, int? maxOutputTokens = null,
-        string? reasoning = null, ModelRuntimeEvidence? runtimeEvidence = null, bool replaceRuntimeEvidence = false) => new()
-    {
-        BaseUrl = config.BaseUrl,
-        ApiMode = config.ApiMode,
-        ApiToken = config.ApiToken,
-        Model = config.Model,
-        ExplicitModelAssignment = config.ExplicitModelAssignment,
-        Timeout = config.Timeout,
-        Temperature = config.Temperature,
-        MaxOutputTokens = maxOutputTokens ?? config.MaxOutputTokens,
-        ContextLength = config.ContextLength,
-        ConfiguredContextWindow = config.ConfiguredContextWindow,
-        HistoryPolicy = config.HistoryPolicy,
-        ResponseTone = config.ResponseTone,
-        CustomTone = config.CustomTone,
-        Reasoning = reasoning ?? config.Reasoning,
-        RuntimeEvidence = replaceRuntimeEvidence ? runtimeEvidence : config.RuntimeEvidence,
-        NativeStatefulChat = config.NativeStatefulChat,
-        NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
-        PreviousResponseId = config.PreviousResponseId,
-        PreserveNativeInputWhitespace = config.PreserveNativeInputWhitespace,
-        RequestInspectionContext = config.RequestInspectionContext,
-        LastError = config.LastError,
-        LastLatencyMs = config.LastLatencyMs,
-        LastTestOk = config.LastTestOk,
-        Extra = config.Extra
-    };
+        string? reasoning = null, ModelRuntimeEvidence? runtimeEvidence = null, bool replaceRuntimeEvidence = false) =>
+        ModelProviderRequests.Copy(config, maxOutputTokens, reasoning,
+            runtimeEvidence: runtimeEvidence, replaceRuntimeEvidence: replaceRuntimeEvidence);
 }

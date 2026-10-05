@@ -6297,46 +6297,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return missing;
     }
 
-    internal static ModelProviderConfig Config(ArenaViewSnapshot current, string model, int maxTokens)
-    {
-        var baseUrl = string.IsNullOrWhiteSpace(current.ProviderBaseUrl) || current.ProviderBaseUrl == "-"
-            ? ModelProviderDefaults.BaseUrl
-            : current.ProviderBaseUrl;
-        var apiMode = ModelProviderApiModes.Normalize(current.ProviderApiMode);
-        var identity = ModelRuntimeSettingsRegistry.Identity(new ModelProviderConfig
-        {
-            BaseUrl = baseUrl,
-            ApiMode = apiMode,
-            Model = model
-        });
-        var settings = current.ModelSettings.FirstOrDefault(setting =>
-            setting.ModelIdentity.Equals(identity, StringComparison.Ordinal));
-        var responseTone = ModelResponseTones.NormalizeResponseTone(settings?.ResponseTone);
-        return new ModelProviderConfig
-        {
-            BaseUrl = baseUrl,
-            ApiMode = apiMode,
-            Model = model,
-            ApiToken = current.ProviderApiToken,
-            Timeout = Math.Clamp(current.ProviderTimeout, 1, 3600),
-            Temperature = current.ProviderTemperature <= 0 ? ModelProviderDefaults.Temperature : current.ProviderTemperature,
-            MaxOutputTokens = maxTokens,
-            ContextLength = current.ProviderContextLength,
-            ConfiguredContextWindow = settings is null
-                ? 0
-                : ModelRuntimeSettingsRegistry.ClampConfiguredContextWindow(settings.ConfiguredContextWindow),
-            HistoryPolicy = settings is null
-                ? ModelHistoryPolicies.Strict
-                : ModelHistoryPolicies.NormalizeHistoryPolicy(settings.HistoryPolicy),
-            ResponseTone = responseTone,
-            CustomTone = responseTone == ModelResponseTones.Custom
-                ? ModelResponseTones.NormalizeCustomTone(settings?.CustomTone)
-                : "",
-            Reasoning = current.ProviderReasoning,
-            NativeStatefulChat = current.ProviderNativeStatefulChat,
-            NativeIdleTtlSeconds = current.ProviderNativeIdleTtlSeconds
-        };
-    }
+    internal static ModelProviderConfig Config(ArenaViewSnapshot current, string model, int maxTokens) =>
+        WorkspaceProviderRequestService.SharedConfig(current, model, maxTokens);
 
     private static bool CompletionHasUsableText(ModelCompletionResult result)
     {
@@ -6348,47 +6310,13 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return result.Ok && string.IsNullOrWhiteSpace(result.Text);
     }
 
-    internal static ModelProviderConfig WithReasoningDisabled(ModelProviderConfig config)
-    {
-        return new ModelProviderConfig
-        {
-            BaseUrl = config.BaseUrl,
-            ApiMode = config.ApiMode,
-            ApiToken = config.ApiToken,
-            Model = config.Model,
-            Timeout = config.Timeout,
-            Temperature = config.Temperature,
-            MaxOutputTokens = config.MaxOutputTokens,
-            ContextLength = config.ContextLength,
-            ConfiguredContextWindow = config.ConfiguredContextWindow,
-            HistoryPolicy = config.HistoryPolicy,
-            ResponseTone = config.ResponseTone,
-            CustomTone = config.CustomTone,
-            Reasoning = "off",
-            NativeStatefulChat = config.NativeStatefulChat,
-            NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
-            PreviousResponseId = config.PreviousResponseId,
-            LastError = config.LastError,
-            LastLatencyMs = config.LastLatencyMs,
-            LastTestOk = config.LastTestOk,
-            Extra = config.Extra
-        };
-    }
+    internal static ModelProviderConfig WithReasoningDisabled(ModelProviderConfig config) =>
+        ModelProviderRequests.Copy(config, reasoning: "off");
 
     internal static IReadOnlyList<ModelChatMessage> ApplyWorkspaceTone(
         ModelProviderConfig config,
         IReadOnlyList<ModelChatMessage> prompt)
-    {
-        var instruction = ModelResponseToneInstructions.Instruction(config.ResponseTone, config.CustomTone);
-        if (instruction.Length == 0
-            || prompt.Any(message => message.Role.Equals("system", StringComparison.OrdinalIgnoreCase)
-                && message.Content.Contains(instruction, StringComparison.Ordinal)))
-        {
-            return prompt;
-        }
-
-        return ModelResponseToneInstructions.Apply(config, prompt, factoryMode: false);
-    }
+        => WorkspaceProviderRequestService.ApplyTone(config, prompt);
 
     internal static bool PromptLikelyRequiresCommand(string prompt)
     {

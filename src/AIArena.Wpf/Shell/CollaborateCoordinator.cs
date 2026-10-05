@@ -1301,12 +1301,14 @@ internal sealed class CollaborateCoordinator
             return CollaborateStep.Failed(roleId, RoleName(roleId), "-", label, "No model configured.");
         }
 
-        var result = await modelClient.CompleteChatAsync(plan.Primary, messages, cancellationToken);
+        var result = await modelClient.CompleteChatAsync(plan.Primary,
+            WorkspaceProviderRequestService.ApplyTone(plan.Primary, messages), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var model = CompletionModel(result, plan.Primary);
         if (!CompletionHasUsableText(result) && plan.Fallback is not null)
         {
-            result = await modelClient.CompleteChatAsync(plan.Fallback, messages, cancellationToken);
+            result = await modelClient.CompleteChatAsync(plan.Fallback,
+                WorkspaceProviderRequestService.ApplyTone(plan.Fallback, messages), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             model = CompletionModel(result, plan.Fallback);
         }
@@ -2436,25 +2438,8 @@ internal sealed class CollaborateCoordinator
         return ShellUiHelpers.Truncate(compact, maxChars, ShellUiHelpers.TruncatedNoticeSuffix);
     }
 
-    private ProviderPlan ProviderPlanForRole(ArenaViewSnapshot current, string roleId)
-    {
-        var sharedModel = current.DefaultForUnassignedAgentsEnabled
-            ? CleanModel(current.ProviderModel)
-            : "";
-        var roleModel = CleanModel(ModelForRole(current, roleId));
-        var model = string.IsNullOrWhiteSpace(roleModel) ? sharedModel : roleModel;
-        if (string.IsNullOrWhiteSpace(model))
-        {
-            return new ProviderPlan(null, null);
-        }
-
-        var primary = Config(current, model, OutputTokensForRole(roleId));
-        var fallback = !string.IsNullOrWhiteSpace(sharedModel)
-            && !sharedModel.Equals(model, StringComparison.OrdinalIgnoreCase)
-            ? Config(current, sharedModel, OutputTokensForRole(roleId))
-            : null;
-        return new ProviderPlan(primary, fallback);
-    }
+    private static WorkspaceProviderRequestPlan ProviderPlanForRole(ArenaViewSnapshot current, string roleId) =>
+        WorkspaceProviderRequestService.ForRole(current, roleId, OutputTokensForRole(roleId));
 
     internal static IReadOnlyList<string> MissingConfiguredModelRoles(ArenaViewSnapshot current, string mode)
     {
@@ -2464,6 +2449,12 @@ internal sealed class CollaborateCoordinator
         var missing = new List<string>();
         foreach (var roleId in RequiredRoleIdsForMode(mode))
         {
+            if (current.CompletionRoutes is { } routes)
+            {
+                if (string.IsNullOrWhiteSpace(routes.GetValueOrDefault(roleId)?.Primary?.Model))
+                    missing.Add(RoleName(roleId));
+                continue;
+            }
             var roleModel = CleanModel(ModelForRole(current, roleId));
             if (string.IsNullOrWhiteSpace(roleModel) && string.IsNullOrWhiteSpace(sharedModel))
             {
@@ -2488,26 +2479,6 @@ internal sealed class CollaborateCoordinator
             0 => "",
             1 => $"No model configured for {roleNames[0]}.",
             _ => $"No model configured for {string.Join(", ", roleNames)}."
-        };
-    }
-
-    private static ModelProviderConfig Config(ArenaViewSnapshot current, string model, int maxTokens)
-    {
-        return new ModelProviderConfig
-        {
-            BaseUrl = string.IsNullOrWhiteSpace(current.ProviderBaseUrl) || current.ProviderBaseUrl == "-"
-                ? ModelProviderDefaults.BaseUrl
-                : current.ProviderBaseUrl,
-            ApiMode = ModelProviderApiModes.Normalize(current.ProviderApiMode),
-            Model = model,
-            ApiToken = current.ProviderApiToken,
-            Timeout = Math.Clamp(current.ProviderTimeout, 1, 300),
-            Temperature = current.ProviderTemperature <= 0 ? ModelProviderDefaults.Temperature : current.ProviderTemperature,
-            MaxOutputTokens = maxTokens,
-            ContextLength = current.ProviderContextLength,
-            Reasoning = current.ProviderReasoning,
-            NativeStatefulChat = current.ProviderNativeStatefulChat,
-            NativeIdleTtlSeconds = current.ProviderNativeIdleTtlSeconds
         };
     }
 
@@ -5866,7 +5837,6 @@ internal sealed class CollaborateCoordinator
 
     private sealed record ToolCalculation(string Input, string Result);
 
-    private sealed record ProviderPlan(ModelProviderConfig? Primary, ModelProviderConfig? Fallback);
 
     private sealed record CollaborateRunResult(bool Ok, string FinalAnswer, IReadOnlyList<CollaborateStep> TraceSteps);
 

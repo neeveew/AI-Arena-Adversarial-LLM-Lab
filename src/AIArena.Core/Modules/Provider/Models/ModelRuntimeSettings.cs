@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
+using AIArena.Core.Providers;
 
 namespace AIArena.Core.Models;
 
@@ -329,34 +330,8 @@ public static class ModelRuntimeSettingsRegistry
         };
     }
 
-    private static ModelProviderConfig CopyWithSettings(ModelProviderConfig config, ModelRuntimeSettings settings) => new()
-    {
-        BaseUrl = config.BaseUrl,
-        ApiMode = config.ApiMode,
-        ApiToken = config.ApiToken,
-        Model = config.Model,
-        ExplicitModelAssignment = config.ExplicitModelAssignment,
-        Timeout = config.Timeout,
-        Temperature = config.Temperature,
-        MaxOutputTokens = config.MaxOutputTokens,
-        // This is a resolved request copy: keep the legacy fallback aligned so
-        // an explicit Provider default (0) cannot revive a previous override.
-        ContextLength = settings.ConfiguredContextWindow,
-        ConfiguredContextWindow = settings.ConfiguredContextWindow,
-        HistoryPolicy = settings.HistoryPolicy,
-        ResponseTone = settings.ResponseTone,
-        CustomTone = settings.CustomTone,
-        Reasoning = config.Reasoning,
-        NativeStatefulChat = config.NativeStatefulChat,
-        NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
-        PreviousResponseId = config.PreviousResponseId,
-        PreserveNativeInputWhitespace = config.PreserveNativeInputWhitespace,
-        RequestInspectionContext = config.RequestInspectionContext,
-        LastError = config.LastError,
-        LastLatencyMs = config.LastLatencyMs,
-        LastTestOk = config.LastTestOk,
-        Extra = config.Extra
-    };
+    private static ModelProviderConfig CopyWithSettings(ModelProviderConfig config, ModelRuntimeSettings settings) =>
+        ModelProviderRequests.Copy(config, settings: settings);
 
     private static bool SettingsEqual(ModelRuntimeSettings? left, ModelRuntimeSettings right) => left is not null
         && left.ModelIdentity == right.ModelIdentity

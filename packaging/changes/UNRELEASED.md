@@ -7,6 +7,8 @@ Changes after `0.4.144-beta`:
 - Preserve whitespace and indentation in compatible provider multipart completions and streamed content parts.
 - Handle multiple LM Studio message blocks consistently during streaming and completion, preserving their text and accepted partial output if the server fails.
 - Keep empty model-catalog actions reachable by scrolling when a compact window leaves too little vertical space.
+- Use each assigned model's saved server, adapter, credentials, context, and request options in AI Collaborate. Preserve distinct-server fallback even when both servers advertise the same model name, and recognize legacy assignments by their complete connection identity.
+- Share provider request copying and response-tone handling across Arena, Agent, and AI Collaborate. Agent retains its saved shared-provider options and zero temperature; Collaborate applies the assigned model's saved tone.
 - Resolve conflicting legacy retry memories from retained evidence without rewriting their history. Preserve manual corrections, migrated summaries, unrelated facts, and records outside the bounded notes editor.
 - Reject inherited test filters during release verification, and compare generated guide content consistently across LF and CRLF checkouts.
 
@@ -26,6 +28,11 @@ The window smoke covers Models and Arena at 960x640 and 1500x960 and verifies a
 clean shutdown. After the compact empty-catalog adjustment, the responsive Models
 check and WPF build passed and the four window captures were repeated. These
 checks do not run real model completions or certify a release.
+
+The subsequent workspace-routing repairs reproduced four failures before the
+change and passed all 384 Core and 633 WPF tests afterward. The rebuilt app also
+passed the isolated Models/Arena window smoke and clean shutdown. Evidence is
+under `artifacts/bugfix-2026-10-05-routing/`.
 
 The published `0.4.144-beta` installer remains unchanged. Its versioned notes,
 checksums, and authenticated verification receipts describe that exact release;

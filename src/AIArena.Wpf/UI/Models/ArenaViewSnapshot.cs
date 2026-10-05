@@ -129,6 +129,11 @@ public sealed record ArenaViewSnapshot(
 
     public int ProviderLastLatencyMs { get; init; }
 
+    // Request-only data: retained in process, never serialized as presentation
+    // or control-plane output. Includes the credentials for each saved route.
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal IReadOnlyDictionary<string, Services.WorkspaceProviderRequestPlan>? CompletionRoutes { get; init; }
+
     /// <summary>
     /// Canonical, privacy-safe per-model runtime settings. Keys are opaque
     /// connection-and-model identities; provider residency evidence is never

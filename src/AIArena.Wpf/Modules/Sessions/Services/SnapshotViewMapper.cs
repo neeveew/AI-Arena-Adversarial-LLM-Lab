@@ -84,6 +84,7 @@ public static class SnapshotViewMapper
             FactoryMode = snapshot.Engine.FactoryMode,
             DefaultForUnassignedAgentsEnabled = snapshot.Engine.DefaultForUnassignedAgentsEnabled,
             ExplicitRoleModels = ExplicitRoleModelsFrom(snapshot, sharedConfig),
+            CompletionRoutes = WorkspaceProviderRequestService.ProjectRoutes(snapshot),
             HasFactoryConversationRoot = factoryGroup.IsAnchored && factoryGroup.HasUsableRoot,
             FactoryConversationRootAssigned = factoryGroup.IsAnchored,
             FactoryConversationEntryCount = factoryGroup.EligibleEntryCount,
@@ -224,7 +225,8 @@ public static class SnapshotViewMapper
 
         var model = config.Model.Trim();
         return config.ExplicitModelAssignment
-            || !model.Equals(shared.Model.Trim(), StringComparison.Ordinal)
+            || !ModelRuntimeSettingsRegistry.Identity(config).Equals(
+                ModelRuntimeSettingsRegistry.Identity(shared), StringComparison.Ordinal)
                 ? model
                 : "";
     }
