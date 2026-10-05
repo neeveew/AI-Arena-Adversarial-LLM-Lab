@@ -1891,6 +1891,7 @@ public sealed class TurnRunnerService
         var result = await completionExecutor.CompleteAsync(primaryConfig, messages, cancellationToken,
             publishText: !allowInternetTool);
         if (result.Ok
+            || !ModelCompletionRecoveryScope.CanUseFallback(result)
             || result.FailureKind is ModelCompletionFailureKind.ContextLimitExceeded or ModelCompletionFailureKind.EmptyPublicContent
             || completionExecutor.RecoveryUsed
             || preparedTurnContext.FallbackConfig is null

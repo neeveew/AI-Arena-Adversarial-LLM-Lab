@@ -63,6 +63,7 @@ internal sealed class CollaborateCoordinator
     ];
 
     private readonly IModelProviderClient modelClient;
+    private readonly IModelRuntimeEvidenceResolver? runtimeEvidenceResolver;
     private readonly Dispatcher dispatcher;
     private readonly ScrollViewer chatScrollViewer;
     private readonly Panel messageItems;
@@ -207,9 +208,11 @@ internal sealed class CollaborateCoordinator
         CollaborateHistoryStore? historyStore = null,
         Func<string, CancellationToken, Task<Stream>>? toolDocumentStreamFactory = null,
         ComposerDraftStore? composerDraftStore = null,
-        WorkspaceOperationStatus? operationStatus = null)
+        WorkspaceOperationStatus? operationStatus = null,
+        IModelRuntimeEvidenceResolver? runtimeEvidenceResolver = null)
     {
         this.modelClient = modelClient ?? new ModelProviderClient();
+        this.runtimeEvidenceResolver = runtimeEvidenceResolver;
         this.dispatcher = dispatcher;
         this.chatScrollViewer = chatScrollViewer;
         this.messageItems = messageItems;
@@ -1301,21 +1304,22 @@ internal sealed class CollaborateCoordinator
             return CollaborateStep.Failed(roleId, RoleName(roleId), "-", label, "No model configured.");
         }
 
-        var result = await modelClient.CompleteChatAsync(plan.Primary,
-            WorkspaceProviderRequestService.ApplyTone(plan.Primary, messages), cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        var model = CompletionModel(result, plan.Primary);
-        if (!CompletionHasUsableText(result) && plan.Fallback is not null)
+        var recovery = new ModelCompletionRecoveryScope();
+        var primary = await WorkspaceProviderRequestService.ResolveRuntimeAsync(plan.Primary, runtimeEvidenceResolver, cancellationToken);
+        Task<ModelCompletionResult> Complete(ModelProviderConfig config, IReadOnlyList<ModelChatMessage> prompt, CancellationToken token) =>
+            modelClient.CompleteChatAsync(config, prompt, token);
+        var result = await recovery.CompleteAsync(primary, WorkspaceProviderRequestService.ApplyTone(primary, messages), Complete, cancellationToken);
+        var model = CompletionModel(result, primary);
+        if (!recovery.RecoveryUsed && ModelCompletionRecoveryScope.CanUseFallback(result) && plan.Fallback is not null)
         {
-            result = await modelClient.CompleteChatAsync(plan.Fallback,
-                WorkspaceProviderRequestService.ApplyTone(plan.Fallback, messages), cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            model = CompletionModel(result, plan.Fallback);
+            var fallback = await WorkspaceProviderRequestService.ResolveRuntimeAsync(plan.Fallback, runtimeEvidenceResolver, cancellationToken);
+            result = await recovery.CompleteAsync(fallback, WorkspaceProviderRequestService.ApplyTone(fallback, messages), Complete, cancellationToken);
+            model = CompletionModel(result, fallback);
         }
 
         return CompletionHasUsableText(result)
             ? CollaborateStep.Completed(roleId, RoleName(roleId), model, label, result.Text, result.LatencyMs, result.TotalTokens)
-            : CollaborateStep.Failed(roleId, RoleName(roleId), model, label, CompletionError(result));
+            : CollaborateStep.Failed(roleId, RoleName(roleId), model, label, CompletionError(result), result.Text, result.LatencyMs, result.TotalTokens);
     }
 
     private static bool CompletionHasUsableText(ModelCompletionResult result)
@@ -3322,6 +3326,8 @@ internal sealed class CollaborateCoordinator
         {
             return new CollaborateRunResult(fallbacks.All(step => step.Ok), final.Text, traceSteps);
         }
+        if (!string.IsNullOrWhiteSpace(final.Text))
+            return new CollaborateRunResult(false, $"{final.Text}\n\nFinal synthesis failed: {final.Error}", traceSteps);
 
         var fallback = fallbacks.LastOrDefault(step => step.Ok && !string.IsNullOrWhiteSpace(step.Text));
         if (fallback is not null)
@@ -5874,9 +5880,10 @@ internal sealed class CollaborateCoordinator
             return new CollaborateStep(roleId, roleName, model, label, text, true, "", latencyMs, totalTokens);
         }
 
-        public static CollaborateStep Failed(string roleId, string roleName, string model, string label, string error)
+        public static CollaborateStep Failed(string roleId, string roleName, string model, string label, string error,
+            string partial = "", int latencyMs = 0, int totalTokens = 0)
         {
-            return new CollaborateStep(roleId, roleName, model, label, "", false, error, 0, 0);
+            return new CollaborateStep(roleId, roleName, model, label, partial, false, error, latencyMs, totalTokens);
         }
     }
 }

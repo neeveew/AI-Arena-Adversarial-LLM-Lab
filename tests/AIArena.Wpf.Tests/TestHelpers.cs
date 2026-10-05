@@ -234,7 +234,8 @@ static CollaborateCoordinator CreateCollaborateCoordinatorForTest(
     TextBox? calculatorText = null,
     Button? runCalculatorButton = null,
     Func<string, CancellationToken, Task<Stream>>? toolDocumentStreamFactory = null,
-    ComposerDraftStore? composerDraftStore = null)
+    ComposerDraftStore? composerDraftStore = null,
+    IModelRuntimeEvidenceResolver? runtimeEvidenceResolver = null)
 {
     var modePicker = new ComboBox();
     var fastMode = new ComboBoxItem { Content = "Fast", Tag = "fast" };
@@ -288,7 +289,8 @@ static CollaborateCoordinator CreateCollaborateCoordinatorForTest(
         setShellStatus,
         historyStore,
         toolDocumentStreamFactory,
-        composerDraftStore);
+        composerDraftStore,
+        runtimeEvidenceResolver: runtimeEvidenceResolver);
 }
 
 static Brush AccentResourceBrush(string key)

@@ -793,7 +793,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             runbookMetaText: AgentRunbookMetaText,
             composerDraftStore: _composerDraftStore,
             operationStatus: new WorkspaceOperationStatus(ShellTopBar.Presentation.StatusCenter,
-                "agent", "Agent", "agent", () => new ApplicationStatusIdentity(_activeSession?.Id ?? "")));
+                "agent", "Agent", "agent", () => new ApplicationStatusIdentity(_activeSession?.Id ?? "")),
+            runtimeEvidenceResolver: runtimeEvidence);
         _agentImpactExplorerCoordinator = new AgentImpactExplorerCoordinator(
             AgentImpactExplorerExpander,
             AgentImpactStatusText,
@@ -1063,7 +1064,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             status => SetApplicationStatus("collaborate.run", "Collaborate", status, "collaborate"),
             composerDraftStore: _composerDraftStore,
             operationStatus: new WorkspaceOperationStatus(ShellTopBar.Presentation.StatusCenter,
-                "collaborate", "Collaborate", "collaborate", () => new ApplicationStatusIdentity(_activeSession?.Id ?? "")));
+                "collaborate", "Collaborate", "collaborate", () => new ApplicationStatusIdentity(_activeSession?.Id ?? "")),
+            runtimeEvidenceResolver: runtimeEvidence);
         _collaborateCoordinator.Initialize();
         _refreshTimer = new DispatcherTimer
         {

@@ -6,46 +6,23 @@ namespace AIArena.Core.Services;
 /// <summary>Request-only fitting; saved preferences and prompt text are never rewritten.</summary>
 internal static class ArenaRequestBudget
 {
-    internal const int MinimumUsefulOutputTokens = 128;
+    internal const int MinimumUsefulOutputTokens = ModelProviderRequestBudget.MinimumUsefulOutputTokens;
 
     internal static int ContextWindow(ModelProviderConfig config)
-    {
-        var configured = ModelRuntimeSettingsRegistry.EffectiveConfiguredContextWindow(config);
-        var active = Math.Max(0, config.RuntimeEvidence?.ContextWindow ?? 0);
-        return active > 0 ? configured > 0 ? Math.Min(active, configured) : active : configured;
-    }
+        => ModelProviderRequestBudget.ContextWindow(config);
 
     internal static int TargetTokens(int contextWindow) =>
-        Math.Max(1, (int)Math.Floor(contextWindow * (ArenaHistoryBudgetService.TargetPercent / 100d)));
+        ModelProviderRequestBudget.TargetTokens(contextWindow);
 
     internal static int FittedOutput(ModelProviderConfig config, int promptTokens)
-    {
-        var context = ContextWindow(config);
-        var requested = Math.Max(1, config.MaxOutputTokens);
-        if (context <= 0) return requested;
-        var remaining = TargetTokens(context) - promptTokens;
-        var minimum = Math.Min(requested, MinimumUsefulOutputTokens);
-        return remaining < minimum ? 0 : Math.Min(requested, remaining);
-    }
+        => ModelProviderRequestBudget.FittedOutput(config, promptTokens);
 
     internal static ArenaBudgetedPrompt FitUnchanged(ModelProviderConfig config,
         IReadOnlyList<ModelChatMessage> messages, ArenaHistoryBudgetReceipt? receipt = null)
-    {
-        var context = ContextWindow(config);
-        if (context <= 0) return new(messages, receipt, "");
-        var estimated = ArenaHistoryBudgetService.EstimateTokens(messages);
-        var output = FittedOutput(config, estimated);
-        return output <= 0
-            ? new(messages, receipt,
-                $"The retained prompt needs about {estimated:N0} tokens and cannot fit the {context:N0}-token context with room for a public answer. Shorten the latest input or increase the loaded context; required conversation text was preserved.",
-                ModelCompletionFailureKind.ContextLimitExceeded)
-            : new ArenaBudgetedPrompt(messages, receipt, "") { OutputTokenLimit = output };
-    }
+        => ModelProviderRequestBudget.FitUnchanged(config, messages, receipt);
 
     internal static ModelProviderConfig Apply(ModelProviderConfig config, ArenaBudgetedPrompt prompt) =>
-        prompt.OutputTokenLimit > 0 && prompt.OutputTokenLimit != config.MaxOutputTokens
-            ? Copy(config, maxOutputTokens: prompt.OutputTokenLimit)
-            : config;
+        ModelProviderRequestBudget.Apply(config, prompt);
 
     internal static async Task<ModelProviderConfig> ResolveAsync(ModelProviderConfig config,
         IModelRuntimeEvidenceResolver? resolver, CancellationToken cancellationToken)

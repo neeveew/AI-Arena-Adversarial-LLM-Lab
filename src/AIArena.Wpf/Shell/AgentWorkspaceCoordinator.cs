@@ -64,6 +64,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private readonly Action<WpfSettings> persistSettings;
     private readonly Func<WpfSettings> settings;
     private readonly IModelProviderClient modelClient;
+    private readonly IModelRuntimeEvidenceResolver? runtimeEvidenceResolver;
     private readonly TextBox workspacePathText;
     private readonly Button workspaceBrowseButton;
     private readonly Button workspaceApplyButton;
@@ -665,7 +666,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>>? discoverDotNetWorkspaceAsync = null,
         ComposerDraftStore? composerDraftStore = null,
         Action<WpfSettings>? persistSettings = null,
-        WorkspaceOperationStatus? operationStatus = null)
+        WorkspaceOperationStatus? operationStatus = null,
+        IModelRuntimeEvidenceResolver? runtimeEvidenceResolver = null)
     {
         this.owner = owner;
         this.dispatcher = dispatcher;
@@ -674,6 +676,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         this.settings = settings;
         this.operationStatus = operationStatus;
         this.modelClient = modelClient ?? new ModelProviderClient();
+        this.runtimeEvidenceResolver = runtimeEvidenceResolver;
         this.workspacePathText = workspacePathText;
         this.workspaceBrowseButton = workspaceBrowseButton;
         this.workspaceApplyButton = workspaceApplyButton;
@@ -2697,7 +2700,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         string roleName,
         CancellationToken cancellationToken)
     {
-        var effectivePrompt = ApplyWorkspaceTone(config, prompt);
+        var effectivePrompt = prompt;
         if (!settings().StreamModelResponses || modelClient is not IStreamingModelProviderClient streamingClient)
         {
             return await modelClient.CompleteChatAsync(config, effectivePrompt, cancellationToken);
@@ -2722,6 +2725,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         public VirtualizingConversationPanel.ConversationRowHandle? VirtualHandle { get; set; }
         public StringBuilder Buffer { get; } = new();
         public DateTime LastRender { get; set; } = DateTime.MinValue;
+        public bool IsActive { get; set; } = true;
     }
 
     private LiveStreamCard BeginLiveStreamCard(string roleId, string roleName)
@@ -2778,6 +2782,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void AppendLiveStreamText(LiveStreamCard card, string delta, string roleId, string roleName)
     {
+        if (!dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(() => AppendLiveStreamText(card, delta, roleId, roleName));
+            return;
+        }
+        if (!card.IsActive) return;
         card.Buffer.Append(delta);
         var now = DateTime.UtcNow;
         if ((now - card.LastRender).TotalMilliseconds < 80)
@@ -2798,6 +2808,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void RemoveLiveStreamCard(LiveStreamCard card)
     {
+        card.IsActive = false;
         if (card.VirtualHandle is not null)
         {
             card.VirtualHandle.Remove();
@@ -2821,26 +2832,23 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return AgentStep.Failed(role.RoleId, role.Name, "-", "No model configured.");
         }
 
-        var result = await CompleteChatPreferStreamingAsync(plan.Primary, prompt, role.RoleId, role.Name, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        var model = CompletionModel(result, plan.Primary);
-        if (CompletionIsEmptySuccess(result))
+        var recovery = new ModelCompletionRecoveryScope();
+        var primary = await WorkspaceProviderRequestService.ResolveRuntimeAsync(plan.Primary, runtimeEvidenceResolver, cancellationToken);
+        Task<ModelCompletionResult> Complete(ModelProviderConfig config, IReadOnlyList<ModelChatMessage> messages, CancellationToken token) =>
+            CompleteChatPreferStreamingAsync(config, messages, role.RoleId, role.Name, token);
+        var result = await recovery.CompleteAsync(primary, ApplyWorkspaceTone(primary, prompt), Complete, cancellationToken);
+        var model = CompletionModel(result, primary);
+        if (!recovery.RecoveryUsed && ModelCompletionRecoveryScope.CanUseFallback(result) && plan.Fallback is not null)
         {
-            result = await CompleteChatPreferStreamingAsync(WithReasoningDisabled(plan.Primary), prompt, role.RoleId, role.Name, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            model = CompletionModel(result, plan.Primary);
+            var fallback = await WorkspaceProviderRequestService.ResolveRuntimeAsync(plan.Fallback, runtimeEvidenceResolver, cancellationToken);
+            result = await recovery.CompleteAsync(fallback, ApplyWorkspaceTone(fallback, prompt), Complete, cancellationToken);
+            model = CompletionModel(result, fallback);
         }
-
-        if (!CompletionHasUsableText(result) && plan.Fallback is not null)
-        {
-            result = await CompleteChatPreferStreamingAsync(plan.Fallback, prompt, role.RoleId, role.Name, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            model = CompletionModel(result, plan.Fallback);
-        }
+        if (recovery.RecoveryUsed) AddActivity(role.Name, "A reasoning-only response triggered one supported reduced-reasoning recovery.");
 
         return CompletionHasUsableText(result)
             ? AgentStep.Completed(role.RoleId, role.Name, model, result.Text, result.LatencyMs, result.TotalTokens)
-            : AgentStep.Failed(role.RoleId, role.Name, model, CompletionError(result));
+            : AgentStep.Failed(role.RoleId, role.Name, model, CompletionError(result), result.Text, result.LatencyMs, result.TotalTokens);
     }
 
     private void AddStep(AgentStep step)
@@ -2848,7 +2856,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         latestSteps.Add(step);
         var body = step.Ok
             ? step.Text
-            : $"Model step failed: {step.Error}";
+            : string.IsNullOrWhiteSpace(step.Text) ? $"Model step failed: {step.Error}"
+                : $"{step.Text}\n\nModel step failed: {step.Error}";
         var message = new AgentWorkspaceMessage(step.RoleId, step.RoleName, body, step.Ok ? "Agent" : "Error", step.Model, DateTimeOffset.Now);
         messages.Add(message);
         AddMessagePresentation(message, announceAsNew: !announcedLiveResponseRoles.Remove(step.RoleId));
@@ -6305,11 +6314,6 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return result.Ok && !string.IsNullOrWhiteSpace(result.Text);
     }
 
-    private static bool CompletionIsEmptySuccess(ModelCompletionResult result)
-    {
-        return result.Ok && string.IsNullOrWhiteSpace(result.Text);
-    }
-
     internal static ModelProviderConfig WithReasoningDisabled(ModelProviderConfig config) =>
         ModelProviderRequests.Copy(config, reasoning: "off");
 
@@ -6683,9 +6687,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return new AgentStep(true, roleId, roleName, model, text, latencyMs, totalTokens, "");
         }
 
-        public static AgentStep Failed(string roleId, string roleName, string model, string error)
+        public static AgentStep Failed(string roleId, string roleName, string model, string error,
+            string partial = "", int latencyMs = 0, int totalTokens = 0)
         {
-            return new AgentStep(false, roleId, roleName, model, "", 0, 0, error);
+            return new AgentStep(false, roleId, roleName, model, partial, latencyMs, totalTokens, error);
         }
     }
 }

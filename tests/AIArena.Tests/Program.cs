@@ -33,6 +33,7 @@ var tests = new List<(string Name, Action Test)>
     ("provider output continuation preserves whitespace through real client", ProviderReasoningOutcomeTests.ContinuationPreservesWhitespaceThroughRealProviderClient),
     ("provider reasoning KeepsReportedStopOnAcceptedTransportFailure", ProviderReasoningOutcomeTests.KeepsReportedStopOnAcceptedTransportFailure),
     ("context recovery ReasoningOnlyFactoryRetryPreservesExactConversation", ArenaTurnStreamingTests.ReasoningOnlyFactoryRetryPreservesExactConversation),
+    ("context recovery fallback retains accepted failed partial", ArenaTurnStreamingTests.ArenaFallbackDoesNotReplaceAcceptedPartialOutput),
     ("context recovery ReasoningOnlyRecoveryHonorsCapabilitiesAndTerminalFailures", ArenaTurnStreamingTests.ReasoningOnlyRecoveryHonorsCapabilitiesAndTerminalFailures),
     ("context recovery NarratorAndContinuationShareBoundedReasoningRecovery", ArenaTurnStreamingTests.NarratorAndContinuationShareBoundedReasoningRecovery),
     ("context recovery ActiveContextFitsRequestsWithoutChangingSavedPreferences", ArenaTurnStreamingTests.ActiveContextFitsRequestsWithoutChangingSavedPreferences),

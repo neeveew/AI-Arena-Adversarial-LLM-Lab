@@ -11,6 +11,16 @@ internal sealed record WorkspaceProviderRequestPlan(ModelProviderConfig? Primary
 /// <summary>Shares the Core routing policy and request settings with workspace calls.</summary>
 internal static class WorkspaceProviderRequestService
 {
+    internal static async Task<ModelProviderConfig> ResolveRuntimeAsync(ModelProviderConfig config,
+        IModelRuntimeEvidenceResolver? resolver, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (resolver is null) return config;
+        var evidence = await resolver.ResolveAsync(config, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return ModelProviderRequests.Copy(config, runtimeEvidence: evidence, replaceRuntimeEvidence: true);
+    }
+
     internal static IReadOnlyDictionary<string, WorkspaceProviderRequestPlan> ProjectRoutes(ArenaSnapshot snapshot)
     {
         var routes = new Dictionary<string, WorkspaceProviderRequestPlan>(StringComparer.OrdinalIgnoreCase);

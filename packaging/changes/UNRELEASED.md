@@ -9,6 +9,9 @@ Changes after `0.4.144-beta`:
 - Keep empty model-catalog actions reachable by scrolling when a compact window leaves too little vertical space.
 - Use each assigned model's saved server, adapter, credentials, context, and request options in AI Collaborate. Preserve distinct-server fallback even when both servers advertise the same model name, and recognize legacy assignments by their complete connection identity.
 - Share provider request copying and response-tone handling across Arena, Agent, and AI Collaborate. Agent retains its saved shared-provider options and zero temperature; Collaborate applies the assigned model's saved tone.
+- Share bounded reasoning-only recovery across Arena, Agent, and AI Collaborate. Workspace calls use fresh server capabilities, support one off/low reduction without changing saved preferences or prompts, and honor cancellation and terminal failure states.
+- Fit workspace output allowance against the configured and observed loaded context. Reject prompts that cannot leave useful answer space before calling the model, preserving the original input and avoiding a fallback that would bypass the context failure.
+- Preserve failed public partial answers in Agent and Collaborate output and trace history. Prevent fallback from replacing accepted partial output across app workflows, and reject late Agent streaming updates after their card is removed.
 - Resolve conflicting legacy retry memories from retained evidence without rewriting their history. Preserve manual corrections, migrated summaries, unrelated facts, and records outside the bounded notes editor.
 - Reject inherited test filters during release verification, and compare generated guide content consistently across LF and CRLF checkouts.
 
@@ -33,6 +36,13 @@ The subsequent workspace-routing repairs reproduced four failures before the
 change and passed all 384 Core and 633 WPF tests afterward. The rebuilt app also
 passed the isolated Models/Arena window smoke and clean shutdown. Evidence is
 under `artifacts/bugfix-2026-10-05-routing/`.
+
+The shared recovery and context-budget increment passed all 385 Core and 639 WPF
+tests. Regression coverage includes asynchronous buffered/streaming recovery,
+off/low capability handling, cancellation, terminal failures, retained public
+partials, late streaming callbacks, and output fitting without input loss.
+Startup, Models/Arena window captures, and clean shutdown passed in an isolated
+profile. Evidence is under `artifacts/bugfix-2026-10-05-recovery/`.
 
 The published `0.4.144-beta` installer remains unchanged. Its versioned notes,
 checksums, and authenticated verification receipts describe that exact release;

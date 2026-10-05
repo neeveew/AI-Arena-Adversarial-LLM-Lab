@@ -4531,7 +4531,8 @@ private static AgentWorkspaceCoordinator CreateWorkspaceProfileTestCoordinator(
     IModelProviderClient? modelClient = null,
     Func<ArenaViewSnapshot?>? snapshot = null,
     TextBox? promptText = null,
-    ComposerDraftStore? composerDraftStore = null)
+    ComposerDraftStore? composerDraftStore = null,
+    IModelRuntimeEvidenceResolver? runtimeEvidenceResolver = null)
 {
     var shellPicker = new ComboBox();
     shellPicker.Items.Add(new ComboBoxItem { Content = "PowerShell", Tag = "PowerShell" });
@@ -4606,7 +4607,8 @@ private static AgentWorkspaceCoordinator CreateWorkspaceProfileTestCoordinator(
         _ => { },
         buildWorkspaceProfileAsync: buildWorkspaceProfileAsync,
         discoverDotNetWorkspaceAsync: discoverDotNetWorkspaceAsync,
-        composerDraftStore: composerDraftStore);
+        composerDraftStore: composerDraftStore,
+        runtimeEvidenceResolver: runtimeEvidenceResolver);
 }
 
 }

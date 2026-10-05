@@ -6,6 +6,33 @@ using AIArena.Core.Services;
 
 internal static partial class ArenaTurnStreamingTests
 {
+    public static void ArenaFallbackDoesNotReplaceAcceptedPartialOutput()
+    {
+        WithFixture((store, log, _) =>
+        {
+            var snapshot = Load(store);
+            snapshot.Configs["alpha"] = new ModelProviderConfig
+            {
+                BaseUrl = snapshot.Configs["shared"].BaseUrl,
+                Model = "partial-primary-model", Reasoning = "off"
+            };
+            store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+            var client = new RecoveryClient((config, _, progress, _, call) =>
+            {
+                progress?.Report("Accepted partial answer.");
+                return Task.FromResult(call == 1 ? Success(config, "Accepted partial answer.") with
+                {
+                    Ok = false, Error = "Interrupted fixture response.", FailureKind = ModelCompletionFailureKind.Transport,
+                    StopReason = ModelCompletionStopReason.ProviderError
+                } : Success(config, "A replacement that must never be requested."));
+            });
+            var runner = new TurnRunnerService(client, store, log);
+            var result = runner.RunAgentTurnAsync("default", "alpha").GetAwaiter().GetResult();
+            Require(client.Requests.Count == 1 && result.Completion?.Ok == false && result.Message?.Model.Model == "partial-primary-model",
+                "Arena replaced an accepted failed partial with a shared-model fallback.");
+        });
+    }
+
     public static void ReasoningOnlyFactoryRetryPreservesExactConversation()
     {
         WithFixture((store, log, _) =>
