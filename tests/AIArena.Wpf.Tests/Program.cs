@@ -114,6 +114,8 @@ var tests = new List<(string Name, Action Test)>
     ("optimization agent theme refresh preserves live response and status", AgentThemeRefreshPreservesLiveResponseAndStatus),
     ("optimization collaborate theme refresh preserves pending rows and status", CollaborateThemeRefreshPreservesPendingRowsAndStatus),
     ("optimization conversation cancellation retains draft and typed status", ConversationCancellationRetainsDraftAndTypedStatus),
+    ("agent stream interruption stop retains accepted text", AgentStopRetainsAcceptedStreamAndRejectsLateText),
+    ("agent stream interruption thrown failure retains accepted text", AgentInterruptedStreamRetainsTextWhenProviderThrows),
     ("native services endpoint matches the native principal namespace", NativeControlEndpointMatchesCppPrincipalNamespace),
     ("native services endpoint rejects invalid principal inputs", NativeControlEndpointRejectsInvalidPrincipalInputs),
     ("native services endpoint ignores LOCALAPPDATA environment overrides", NativeControlEndpointIgnoresLocalAppDataEnvironmentOverride),

@@ -34,6 +34,8 @@ var tests = new List<(string Name, Action Test)>
     ("provider reasoning KeepsReportedStopOnAcceptedTransportFailure", ProviderReasoningOutcomeTests.KeepsReportedStopOnAcceptedTransportFailure),
     ("context recovery ReasoningOnlyFactoryRetryPreservesExactConversation", ArenaTurnStreamingTests.ReasoningOnlyFactoryRetryPreservesExactConversation),
     ("context recovery fallback retains accepted failed partial", ArenaTurnStreamingTests.ArenaFallbackDoesNotReplaceAcceptedPartialOutput),
+    ("public output capture freezes accepted text before presentation", PublicOutputCaptureTests.FreezeRetainsAcceptedTextBeforeQueuedPresentation),
+    ("public output capture bounds retained text with truncation evidence", PublicOutputCaptureTests.BoundedCaptureReportsPrefixTruncation),
     ("context recovery ReasoningOnlyRecoveryHonorsCapabilitiesAndTerminalFailures", ArenaTurnStreamingTests.ReasoningOnlyRecoveryHonorsCapabilitiesAndTerminalFailures),
     ("context recovery NarratorAndContinuationShareBoundedReasoningRecovery", ArenaTurnStreamingTests.NarratorAndContinuationShareBoundedReasoningRecovery),
     ("context recovery ActiveContextFitsRequestsWithoutChangingSavedPreferences", ArenaTurnStreamingTests.ActiveContextFitsRequestsWithoutChangingSavedPreferences),

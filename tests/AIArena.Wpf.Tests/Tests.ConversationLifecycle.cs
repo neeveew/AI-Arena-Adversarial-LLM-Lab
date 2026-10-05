@@ -314,7 +314,8 @@ internal static partial class Program
 
     private static AgentWorkspaceCoordinator CreateLifecycleAgent(string workspace, IModelProviderClient client,
         TextBox prompt, TextBlock status, Button send, Button stop, Panel panel, ApplicationStatusCenter center,
-        Action<WpfSettings> persist, ComposerDraftStore? store = null, bool stream = false)
+        Action<WpfSettings> persist, ComposerDraftStore? store = null, bool stream = false,
+        Func<string, Brush>? resourceBrush = null)
     {
         var settings = new WpfSettings
         {
@@ -391,7 +392,7 @@ internal static partial class Program
             replayLastCommandButton: new Button(),
             copyCommandHistoryButton: new Button(),
             snapshot: () => SnapshotForOverviewTest(true, "fixture-model", "", 0, [], []),
-            resourceBrush: AccentResourceBrush,
+            resourceBrush: resourceBrush ?? AccentResourceBrush,
             setShellStatus: _ => { },
             buildWorkspaceProfileAsync: (_, _) => Task.FromResult("profile"),
             composerDraftStore: store,

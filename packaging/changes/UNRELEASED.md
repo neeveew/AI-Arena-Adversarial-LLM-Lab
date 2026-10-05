@@ -12,6 +12,7 @@ Changes after `0.4.144-beta`:
 - Share bounded reasoning-only recovery across Arena, Agent, and AI Collaborate. Workspace calls use fresh server capabilities, support one off/low reduction without changing saved preferences or prompts, and honor cancellation and terminal failure states.
 - Fit workspace output allowance against the configured and observed loaded context. Reject prompts that cannot leave useful answer space before calling the model, preserving the original input and avoiding a fallback that would bypass the context failure.
 - Preserve failed public partial answers in Agent and Collaborate output and trace history. Prevent fallback from replacing accepted partial output across app workflows, and reject late Agent streaming updates after their card is removed.
+- Retain accepted Agent streaming text when Stop cancels the call or the provider throws. Mark it as a partial response, preserve the draft, and keep unfinished commands out of the approval flow. Freeze acceptance before cancellation so late provider output cannot change the retained result or revive Writing.
 - Resolve conflicting legacy retry memories from retained evidence without rewriting their history. Preserve manual corrections, migrated summaries, unrelated facts, and records outside the bounded notes editor.
 - Reject inherited test filters during release verification, and compare generated guide content consistently across LF and CRLF checkouts.
 
@@ -43,6 +44,13 @@ off/low capability handling, cancellation, terminal failures, retained public
 partials, late streaming callbacks, and output fitting without input loss.
 Startup, Models/Arena window captures, and clean shutdown passed in an isolated
 profile. Evidence is under `artifacts/bugfix-2026-10-05-recovery/`.
+
+The Agent stream-interruption repair passed all 387 Core and 641 WPF tests. Its
+Stop matrix covers standard and virtualized panels, queued and visible deltas,
+providers that honor or ignore cancellation, actual settings save/reload, draft
+retention, and disabled partial command staging. The rendered partial cards were
+reviewed in both layouts, and the rebuilt app passed isolated startup/shutdown
+smoke. Evidence is under `artifacts/bugfix-2026-10-06-stream-stop/`.
 
 The published `0.4.144-beta` installer remains unchanged. Its versioned notes,
 checksums, and authenticated verification receipts describe that exact release;

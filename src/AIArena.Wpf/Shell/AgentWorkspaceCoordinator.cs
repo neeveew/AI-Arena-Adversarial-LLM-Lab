@@ -148,6 +148,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private readonly AgentRunbookService runbook = new();
 
     private CancellationTokenSource? chatCancellation;
+    private LiveStreamCard? activeLiveStreamCard;
     private CancellationTokenSource? commandCancellation;
     private CancellationTokenSource? workspaceProfileCancellation;
     private Task workspaceProfileRefreshTask = Task.CompletedTask;
@@ -1604,7 +1605,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (chatCancellation?.IsCancellationRequested == true)
         {
             logicalSendSucceeded = false;
             autoRunAfterChat = false;
@@ -1619,6 +1620,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             if (runbook.HasActiveRun)
             {
                 runbook.MarkInterrupted("Agent collaboration was stopped by the operator.", DateTimeOffset.Now);
+                foreach (var roleId in phaseStates.Where(pair => pair.Value == "Running").Select(pair => pair.Key).ToArray())
+                    phaseStates[roleId] = "Stopped";
                 RenderPhases();
             }
 
@@ -1833,6 +1836,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         if (isRunningChat)
         {
             PauseAutoContinue("User stopped Agent collaboration.");
+            activeLiveStreamCard?.Output?.Seal();
             TryCancel(chatCancellation);
             stopButton.IsEnabled = false;
             UpdateChatProgress("Stopping Agent collaboration...");
@@ -2707,14 +2711,31 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         var liveCard = BeginLiveStreamCard(roleId, roleName);
+        var output = liveCard.Output = new ModelPublicOutputCapture(
+            new Progress<string>(_ => AppendLiveStreamText(liveCard, roleId, roleName)));
+        activeLiveStreamCard = liveCard;
+        using var stopRegistration = cancellationToken.Register(() => output.Seal());
         try
         {
-            var progress = new Progress<string>(delta => AppendLiveStreamText(liveCard, delta, roleId, roleName));
-            return await streamingClient.CompleteChatStreamingAsync(config, effectivePrompt, progress, cancellationToken);
+            var result = await streamingClient.CompleteChatStreamingAsync(config, effectivePrompt, output, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            RetainInterruptedStream(liveCard, roleId, roleName, config.Model, cancellationToken.IsCancellationRequested);
+            throw;
+        }
+        catch
+        {
+            RetainInterruptedStream(liveCard, roleId, roleName, config.Model, stopped: false);
+            throw;
         }
         finally
         {
+            output.Seal();
             RemoveLiveStreamCard(liveCard);
+            if (ReferenceEquals(activeLiveStreamCard, liveCard)) activeLiveStreamCard = null;
         }
     }
 
@@ -2723,7 +2744,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         public required Border Container { get; init; }
         public required TextBlock Text { get; init; }
         public VirtualizingConversationPanel.ConversationRowHandle? VirtualHandle { get; set; }
-        public StringBuilder Buffer { get; } = new();
+        public ModelPublicOutputCapture? Output { get; set; }
         public DateTime LastRender { get; set; } = DateTime.MinValue;
         public bool IsActive { get; set; } = true;
     }
@@ -2780,15 +2801,14 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return card;
     }
 
-    private void AppendLiveStreamText(LiveStreamCard card, string delta, string roleId, string roleName)
+    private void AppendLiveStreamText(LiveStreamCard card, string roleId, string roleName)
     {
         if (!dispatcher.CheckAccess())
         {
-            dispatcher.BeginInvoke(() => AppendLiveStreamText(card, delta, roleId, roleName));
+            dispatcher.BeginInvoke(() => AppendLiveStreamText(card, roleId, roleName));
             return;
         }
-        if (!card.IsActive) return;
-        card.Buffer.Append(delta);
+        if (!card.IsActive || card.Output?.IsSealed == true) return;
         var now = DateTime.UtcNow;
         if ((now - card.LastRender).TotalMilliseconds < 80)
         {
@@ -2796,14 +2816,24 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         card.LastRender = now;
-        var rendered = card.Buffer.ToString();
         const int maxLiveChars = 4000;
-        card.Text.Text = rendered.Length <= maxLiveChars
-            ? rendered
-            : "..." + rendered[^maxLiveChars..];
-        var approximateTokens = Math.Max(1, card.Buffer.Length / 4);
+        var rendered = card.Output?.Tail(maxLiveChars) ?? "";
+        card.Text.Text = card.Output?.Characters > maxLiveChars ? "..." + rendered : rendered;
+        var approximateTokens = Math.Max(1, (card.Output?.Characters ?? 0) / 4);
         SetPhase(roleId, "Running", $"{roleName} is writing... ~{approximateTokens.ToString(CultureInfo.InvariantCulture)} tokens", persist: false);
         ScrollToEnd();
+    }
+
+    private void RetainInterruptedStream(LiveStreamCard card, string roleId, string roleName, string model, bool stopped)
+    {
+        var output = card.Output?.Seal() ?? "";
+        if (string.IsNullOrWhiteSpace(output)) return;
+        var label = stopped ? "Response stopped before completion." : "Response interrupted before completion.";
+        if (card.Output?.Truncated == true) label += " Only the retained output prefix is shown.";
+        var partial = new AgentWorkspaceMessage(roleId, roleName, $"{label}\n\n{output}", "Partial", model, DateTimeOffset.Now);
+        messages.Add(partial);
+        AddMessagePresentation(partial, announceAsNew: false);
+        phaseStates[roleId] = stopped ? "Stopped" : "Error";
     }
 
     private void RemoveLiveStreamCard(LiveStreamCard card)
@@ -3447,7 +3477,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         var isUser = message.Kind.Equals("User", StringComparison.OrdinalIgnoreCase);
         var isStatus = message.Kind.Equals("Status", StringComparison.OrdinalIgnoreCase);
         var isError = message.Kind.Equals("Error", StringComparison.OrdinalIgnoreCase)
-            || message.Kind.Equals("Warning", StringComparison.OrdinalIgnoreCase);
+            || message.Kind.Equals("Warning", StringComparison.OrdinalIgnoreCase)
+            || message.Kind.Equals("Partial", StringComparison.OrdinalIgnoreCase);
         var isAction = message.Kind.Equals("Action", StringComparison.OrdinalIgnoreCase)
             || message.Kind.Equals("Result", StringComparison.OrdinalIgnoreCase);
         var borderBrush = isError
@@ -5078,6 +5109,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         TryCancel(profileCancellation);
+        activeLiveStreamCard?.Output?.Seal();
         TryCancel(chatCancellation);
         TryCancel(commandCancellation);
     }
