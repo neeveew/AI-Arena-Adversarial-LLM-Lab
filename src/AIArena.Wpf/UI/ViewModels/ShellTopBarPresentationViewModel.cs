@@ -21,6 +21,7 @@ public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
     private bool showStatusDock = true;
     private string viewButtonLabel = "View: Custom";
     private long nextLegacyTransientGeneration;
+    private long appliedSnapshotRevision = -1;
     private readonly Dictionary<long, ApplicationStatusReceipt> legacyTransientReceipts = [];
     private readonly Dictionary<string, ApplicationStatusReceipt> compatibilityReceipts = new(StringComparer.Ordinal);
 
@@ -219,6 +220,8 @@ public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
 
     private void ApplyStatusSnapshot(ApplicationStatusSnapshot snapshot)
     {
+        if (snapshot.Revision <= appliedSnapshotRevision) return;
+        appliedSnapshotRevision = snapshot.Revision;
         DisplayStatus = snapshot.AppStatus;
         DisplayStatusToolTip = string.IsNullOrWhiteSpace(snapshot.Primary.Detail)
             ? snapshot.Primary.Summary

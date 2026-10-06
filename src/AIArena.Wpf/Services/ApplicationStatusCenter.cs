@@ -85,7 +85,10 @@ public sealed record ApplicationStatusSnapshot(
     IReadOnlyList<ApplicationStatusEntry> History,
     ApplicationStatusEntry Primary,
     int AdditionalCount,
-    string AppStatus);
+    string AppStatus)
+{
+    internal long Revision { get; init; }
+}
 
 public sealed class ApplicationStatusChangedEventArgs : EventArgs
 {
@@ -131,6 +134,10 @@ public sealed class ApplicationStatusCenter
     private readonly Dictionary<string, bool> heartbeatStateByKey = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ApplicationStatusIdentity> heartbeatIdentityByKey = new(StringComparer.Ordinal);
     private readonly List<ApplicationStatusEntry> history = [];
+    private readonly Queue<PendingStatusNotification> pendingNotifications = new();
+    private long notificationRevision;
+    private long lastDispatchedRevision;
+    private bool dispatchingNotifications;
     private ApplicationStatusIdentity currentIdentity = ApplicationStatusIdentity.Empty;
     private long contextGeneration;
 
@@ -822,7 +829,7 @@ public sealed class ApplicationStatusCenter
             new ReadOnlyCollection<ApplicationStatusEntry>(historySnapshot),
             primary,
             Math.Max(0, current.Length - visible.Length),
-            primary.Summary);
+            primary.Summary) { Revision = notificationRevision };
     }
 
     private ApplicationStatusEntry ReadyEntryLocked()
@@ -845,8 +852,11 @@ public sealed class ApplicationStatusCenter
     private ApplicationStatusChangedEventArgs ChangeArgsLocked(
         string announcement,
         ApplicationStatusAnnouncement announcementKind,
-        bool expiredOnly) =>
-        new(BuildSnapshotLocked(), announcement, announcementKind, expiredOnly);
+        bool expiredOnly)
+    {
+        notificationRevision++;
+        return new(BuildSnapshotLocked(), announcement, announcementKind, expiredOnly);
+    }
 
     private void TrimHistoryLocked()
     {
@@ -1101,6 +1111,42 @@ public sealed class ApplicationStatusCenter
 
     private void RaiseChanged(ApplicationStatusChangedEventArgs? args)
     {
+        if (args is not null) QueueChanged(new PendingStatusNotification(args, null, true));
+    }
+
+    private void QueueChanged(PendingStatusNotification notification)
+    {
+        lock (sync)
+        {
+            if (notification.Args.Snapshot.Revision <= lastDispatchedRevision) return;
+            // Snapshots contain the full current state. Coalesce a notification
+            // burst rather than retaining an unbounded backlog of older copies.
+            if (pendingNotifications.Count >= historyCapacity) pendingNotifications.Clear();
+            pendingNotifications.Enqueue(notification);
+            if (dispatchingNotifications) return;
+            dispatchingNotifications = true;
+        }
+
+        while (true)
+        {
+            lock (sync)
+            {
+                if (pendingNotifications.Count == 0)
+                {
+                    dispatchingNotifications = false;
+                    return;
+                }
+                notification = pendingNotifications.Dequeue();
+                if (notification.Args.Snapshot.Revision <= lastDispatchedRevision) continue;
+                lastDispatchedRevision = notification.Args.Snapshot.Revision;
+            }
+            DeliverChanged(notification);
+        }
+    }
+
+    private void DeliverChanged(PendingStatusNotification notification)
+    {
+        var args = notification.Args;
         if (args is null || Changed is not { } changed) return;
 
         Exception? failure = null;
@@ -1108,6 +1154,7 @@ public sealed class ApplicationStatusCenter
         var observers = changed.GetInvocationList();
         foreach (EventHandler<ApplicationStatusChangedEventArgs> observer in observers)
         {
+            if (notification.ExcludedObservers?.Contains(observer) == true) continue;
             try { observer(this, args); }
             catch (Exception exception)
             {
@@ -1115,21 +1162,19 @@ public sealed class ApplicationStatusCenter
                 (failed ??= []).Add(observer);
             }
         }
-        if (failure is null) return;
+        if (failure is null || !notification.ReportFailures) return;
 
         ApplicationStatusChangedEventArgs warning;
         try { warning = RecordObserverFailure(failure); }
         catch (Exception) { return; } // Diagnostics cannot invalidate an already-applied lifecycle transition.
 
-        // Deliver the diagnostic snapshot only to listeners that accepted the
-        // original notification. This path never recursively reports failures.
-        foreach (EventHandler<ApplicationStatusChangedEventArgs> observer in observers)
-        {
-            if (failed!.Contains(observer)) continue;
-            try { observer(this, warning); }
-            catch (Exception) { }
-        }
+        QueueChanged(new PendingStatusNotification(warning, failed, false));
     }
+
+    private sealed record PendingStatusNotification(
+        ApplicationStatusChangedEventArgs Args,
+        IReadOnlyCollection<EventHandler<ApplicationStatusChangedEventArgs>>? ExcludedObservers,
+        bool ReportFailures);
 
     private ApplicationStatusChangedEventArgs RecordObserverFailure(Exception exception)
     {

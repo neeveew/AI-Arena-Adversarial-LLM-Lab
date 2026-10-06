@@ -34,6 +34,7 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
     private Action<string?>? navigationRequested;
     private Action? clearCompletedRequested;
     private ApplicationStatusCenter? boundStatusCenter;
+    private long appliedSnapshotRevision = -1;
     private string primaryStateText = "Ready";
     private string primarySummary = "Ready";
     private string activeCountLabel = "Ready";
@@ -157,6 +158,7 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
         }
 
         boundStatusCenter = statusCenter;
+        appliedSnapshotRevision = -1;
         boundStatusCenter.Changed += StatusCenter_Changed;
         ApplySnapshot(boundStatusCenter.Snapshot);
     }
@@ -211,6 +213,7 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
 
     private void StatusCenter_Changed(object? sender, ApplicationStatusChangedEventArgs e)
     {
+        if (!ReferenceEquals(sender, boundStatusCenter)) return;
         if (!Dispatcher.CheckAccess())
         {
             Dispatcher.BeginInvoke(
@@ -219,7 +222,7 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
             return;
         }
 
-        ApplySnapshot(e.Snapshot);
+        if (!ApplySnapshot(e.Snapshot)) return;
         if (!e.ExpiredOnly
             && e.AnnouncementKind != ApplicationStatusAnnouncement.None
             && !string.IsNullOrWhiteSpace(e.Announcement))
@@ -230,8 +233,10 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
         }
     }
 
-    private void ApplySnapshot(ApplicationStatusSnapshot snapshot)
+    private bool ApplySnapshot(ApplicationStatusSnapshot snapshot)
     {
+        if (snapshot.Revision <= appliedSnapshotRevision) return false;
+        appliedSnapshotRevision = snapshot.Revision;
         var history = snapshot.History.Select(ToPresentation).ToArray();
         var visible = snapshot.VisibleEntries.Select(ToPresentation).ToArray();
         var primary = ToPresentation(snapshot.Primary);
@@ -241,6 +246,7 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
             () => boundStatusCenter?.ClearCompleted(),
             target => boundStatusCenter?.RequestNavigation(target),
             primary);
+        return true;
     }
 
     private static UniversalStatusRowPresentation ToPresentation(ApplicationStatusEntry entry) => new(
