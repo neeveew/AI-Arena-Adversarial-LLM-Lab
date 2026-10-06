@@ -34,7 +34,7 @@ internal sealed class WorkspaceOperationStatus(
         center.MarkUnconfirmed(receipt, summary, detail);
 
     public void PublishNotice(string summary, ApplicationStatusState state = ApplicationStatusState.Info,
-        string? detail = null)
+        string? detail = null, string category = "")
     {
         // A notice is deliberately unable to begin or finish a run. Persistent
         // failures still use the center's existing priority/redaction policy.
@@ -43,7 +43,12 @@ internal sealed class WorkspaceOperationStatus(
             throw new ArgumentException("Running work requires an owned operation receipt.", nameof(state));
         }
 
-        center.PublishNotice($"{keyPrefix}.notice", source, state, summary, detail,
+        center.PublishNotice(NoticeKey(category), source, state, summary, detail,
             navigationTarget: navigationTarget, identity: identity());
     }
+
+    public bool ResolveNotice(string category = "") => center.Resolve(NoticeKey(category));
+
+    private string NoticeKey(string category) => string.IsNullOrWhiteSpace(category)
+        ? $"{keyPrefix}.notice" : $"{keyPrefix}.notice.{category}";
 }

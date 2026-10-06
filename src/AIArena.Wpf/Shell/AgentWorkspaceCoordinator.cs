@@ -1335,17 +1335,45 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
         if (dispatcher.CheckAccess())
         {
-            RefreshBuildEvidence();
+            RefreshWorkspaceProfilePresentation(profilePath, version);
         }
         else
         {
             try
             {
-                dispatcher.BeginInvoke(RefreshBuildEvidence, DispatcherPriority.Background);
+                dispatcher.BeginInvoke(() => RefreshWorkspaceProfilePresentation(profilePath, version), DispatcherPriority.Background);
             }
             catch (InvalidOperationException) when (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
             {
             }
+        }
+    }
+
+    private void RefreshWorkspaceProfilePresentation(string profilePath, long version)
+    {
+        // Discovery may finish before the queued projection runs. Validate its
+        // ownership again without requiring the already-disposed cancellation source.
+        lock (workspaceProfileSync)
+        {
+            if (disposed || version != workspaceProfileRefreshVersion
+                || !workspacePath.Equals(profilePath, StringComparison.OrdinalIgnoreCase)) return;
+        }
+
+        try
+        {
+            RefreshBuildEvidenceCore();
+            operationStatus?.ResolveNotice("profile-view");
+        }
+        catch (Exception exception)
+        {
+            var warning = AppPostCommitEvidence.CompletionWarning(exception,
+                "the workspace profile view could not be updated", AppErrorContext.Agent, saved: false);
+            try
+            {
+                operationStatus?.PublishNotice(warning, ApplicationStatusState.Warning, category: "profile-view");
+                if (operationStatus is null) setShellStatus(warning);
+            }
+            catch (Exception) { } // Optional view diagnostics cannot invalidate discovery or escape the dispatcher.
         }
     }
 
