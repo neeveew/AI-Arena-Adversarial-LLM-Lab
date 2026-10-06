@@ -657,6 +657,8 @@ var tests = new List<(string Name, Action Test)>
     ("status projection card recovers one-time collection failure", StatusProjectionCardRecoversOneTimeCollectionFailure),
     ("status projection queued card failure does not escape dispatcher", StatusProjectionQueuedCardFailureDoesNotEscapeDispatcher),
     ("status projection persistent queued failure is bounded", StatusProjectionPersistentQueuedFailureIsBounded),
+    ("status rows stable refresh preserves views and focus", StatusRowsStableRefreshPreservesViewsAndFocus),
+    ("status rows reorder and sparse slots stay incremental", StatusRowsReorderAndSparseSlotsStayIncremental),
     ("status observer failures preserve receipts and later subscribers", StatusObserverFailuresPreserveReceiptsAndLaterSubscribers),
     ("status observer warning delivery cannot recurse or escape", StatusObserverWarningDeliveryCannotRecurseOrEscape),
     ("status observer Collaborate Begin failure cannot strand run", CollaborateBeginObserverFailureCannotStrandRun),

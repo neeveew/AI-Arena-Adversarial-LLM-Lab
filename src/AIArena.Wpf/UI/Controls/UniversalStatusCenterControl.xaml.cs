@@ -190,8 +190,11 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
         var selectedId = SelectedHistoryRow?.Id;
         ReplaceRows(HistoryRows, history);
         ApplyFilter(activeFilter, preserveSelectionId: selectedId);
-        ReplaceRows(CompactRows, visibleEntries.Take(CompactRowCount));
-        EnsureFourCompactRows();
+        var compact = visibleEntries.Take(CompactRowCount).ToList();
+        if (compact.Count == 0) compact.Add(UniversalStatusRowPresentation.Ready());
+        while (compact.Count < CompactRowCount)
+            compact.Add(UniversalStatusRowPresentation.Placeholder(compact.Count));
+        ReplaceRows(CompactRows, compact);
 
         var primary = primaryEntry
             ?? CompactRows.FirstOrDefault(row => !row.IsPlaceholder)
@@ -666,10 +669,32 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
         ObservableCollection<UniversalStatusRowPresentation> target,
         IEnumerable<UniversalStatusRowPresentation> source)
     {
-        target.Clear();
-        foreach (var row in source)
+        var desired = source as IReadOnlyList<UniversalStatusRowPresentation> ?? source.ToArray();
+        var now = DateTimeOffset.Now;
+        if (target.Count == desired.Count
+            && target.Select((row, index) => row.HasSameContent(desired[index])).All(same => same))
         {
-            target.Add(row);
+            foreach (var row in target) row.RefreshRelativeTime(now);
+            return;
+        }
+
+        var existingById = target.ToDictionary(row => row.Id, StringComparer.Ordinal);
+        var desiredIds = desired.Select(row => row.Id).ToHashSet(StringComparer.Ordinal);
+        for (var index = target.Count - 1; index >= 0; index--)
+            if (!desiredIds.Contains(target[index].Id)) target.RemoveAt(index);
+
+        for (var index = 0; index < desired.Count; index++)
+        {
+            var incoming = desired[index];
+            if (!existingById.TryGetValue(incoming.Id, out var existing))
+            {
+                target.Insert(index, incoming);
+                continue;
+            }
+            var priorIndex = target.IndexOf(existing);
+            if (priorIndex != index) target.Move(priorIndex, index);
+            if (!existing.HasSameContent(incoming)) target[index] = incoming;
+            else existing.RefreshRelativeTime(now);
         }
     }
 
@@ -757,6 +782,15 @@ internal sealed class UniversalStatusRowPresentation : INotifyPropertyChanged
     public string ProgressAutomationName => HasProgress
         ? $"{Summary}, {ProgressPercent:0} percent"
         : "No progress value";
+
+    internal bool HasSameContent(UniversalStatusRowPresentation other) =>
+        Id == other.Id && Source == other.Source && StateKey == other.StateKey
+        && StateText == other.StateText && Icon == other.Icon && Summary == other.Summary
+        && Detail == other.Detail && Timestamp == other.Timestamp
+        && ProgressPercent == other.ProgressPercent && HasProgress == other.HasProgress
+        && NavigationTarget == other.NavigationTarget && IsActive == other.IsActive
+        && IsUnresolved == other.IsUnresolved && CanClear == other.CanClear
+        && IsPlaceholder == other.IsPlaceholder;
 
     internal void RefreshRelativeTime(DateTimeOffset now)
     {
