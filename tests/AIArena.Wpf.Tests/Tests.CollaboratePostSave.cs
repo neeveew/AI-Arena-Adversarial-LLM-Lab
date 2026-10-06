@@ -102,7 +102,7 @@ internal static partial class Program
                                 (providerOk ? ApplicationStatusState.Succeeded : ApplicationStatusState.Failed)
                             && prompt.Text == (providerOk ? "" : "Preserve this model outcome.") && !coordinator.IsRunning && prompt.IsEnabled,
                         "A post-save status callback changed the provider outcome, draft policy, or cleanup.");
-                    Require(center.VisibleEntries.Any(entry => entry.Key == "collaborate.notice" && entry.State == ApplicationStatusState.Warning)
+                    Require(center.VisibleEntries.Any(entry => entry.Key == ApplicationStatusCenter.ObserverWarningKey && entry.State == ApplicationStatusState.Warning)
                             && !status.Text.Contains("sk-test-secret", StringComparison.Ordinal),
                         "The post-save status failure lacked a safe separate warning.");
                 }

@@ -6,6 +6,7 @@ Changes after `0.4.145-beta`:
 - Keep team generation running through optional trace-preview failures. Restore composer and workspace controls even when a later view refresh keeps failing; retain drafts when the primary history save fails.
 - Preserve memory-note drafts and restore the previous notes and chat record if saving fails. Save before updating tool/sidebar views, retain newer drafts, and share privacy-safe presentation warnings with the send workflow.
 - Recover controls and the original prompt when required transcript setup fails, without starting model work or writing a fake exchange. Optional recent-chat refresh failures allow the requested run to continue.
+- Isolate failing status-view subscribers so owned operation receipts still return, later subscribers receive updates, and Agent/Collaborate calls preserve their real outcomes. Coalesce a privacy-safe status warning without recursively notifying failed listeners.
 
 Verification evidence for this development increment is under
 `artifacts/bugfix-2026-10-06-collaborate-postsave/`. It remains outside the frozen
@@ -13,3 +14,6 @@ Verification evidence for this development increment is under
 
 Memory/preflight verification is under
 `artifacts/bugfix-2026-10-06-collaborate-workflow/`.
+
+Shared status-observer verification is under
+`artifacts/bugfix-2026-10-06-status-observers/`.

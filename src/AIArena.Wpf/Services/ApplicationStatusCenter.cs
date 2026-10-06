@@ -119,6 +119,7 @@ public sealed class ApplicationStatusCenter
 {
     public const int CompactEntryCount = 4;
     public const int DefaultHistoryCapacity = 100;
+    internal const string ObserverWarningKey = "app.status-observer";
 
     private static readonly TimeSpan DefaultSuccessLifetime = TimeSpan.FromSeconds(6);
     private readonly object sync = new();
@@ -1100,9 +1101,56 @@ public sealed class ApplicationStatusCenter
 
     private void RaiseChanged(ApplicationStatusChangedEventArgs? args)
     {
-        if (args is not null)
+        if (args is null || Changed is not { } changed) return;
+
+        Exception? failure = null;
+        List<EventHandler<ApplicationStatusChangedEventArgs>>? failed = null;
+        var observers = changed.GetInvocationList();
+        foreach (EventHandler<ApplicationStatusChangedEventArgs> observer in observers)
         {
-            Changed?.Invoke(this, args);
+            try { observer(this, args); }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+                (failed ??= []).Add(observer);
+            }
+        }
+        if (failure is null) return;
+
+        ApplicationStatusChangedEventArgs warning;
+        try { warning = RecordObserverFailure(failure); }
+        catch (Exception) { return; } // Diagnostics cannot invalidate an already-applied lifecycle transition.
+
+        // Deliver the diagnostic snapshot only to listeners that accepted the
+        // original notification. This path never recursively reports failures.
+        foreach (EventHandler<ApplicationStatusChangedEventArgs> observer in observers)
+        {
+            if (failed!.Contains(observer)) continue;
+            try { observer(this, warning); }
+            catch (Exception) { }
+        }
+    }
+
+    private ApplicationStatusChangedEventArgs RecordObserverFailure(Exception exception)
+    {
+        var presentation = AppErrorPresenter.Present(exception, AppErrorContext.AppFatal);
+        var summary = $"Warning: a status view could not be updated. Code: {presentation.Code}.";
+        lock (sync)
+        {
+            var now = clock();
+            if (currentByKey.TryGetValue(ObserverWarningKey, out var existing)
+                && !existing.IsResolved && existing.Summary == summary)
+            {
+                ReplaceLocked(existing, existing with { UpdatedAt = now, RepeatCount = existing.RepeatCount + 1 });
+            }
+            else
+            {
+                PublishNewLocked(ObserverWarningKey, "App", ApplicationStatusState.Warning,
+                    summary, "The operation's recorded outcome is unchanged.", null, null,
+                    ApplicationStatusIdentity.Empty, background: false,
+                    ApplicationStatusLifetime.UntilResolved, now, out _);
+            }
+            return ChangeArgsLocked("", ApplicationStatusAnnouncement.None, expiredOnly: false);
         }
     }
 }
