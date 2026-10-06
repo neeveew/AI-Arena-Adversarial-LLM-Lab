@@ -221,13 +221,13 @@ public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
     private void ApplyStatusSnapshot(ApplicationStatusSnapshot snapshot)
     {
         if (snapshot.Revision <= appliedSnapshotRevision) return;
-        appliedSnapshotRevision = snapshot.Revision;
         DisplayStatus = snapshot.AppStatus;
         DisplayStatusToolTip = string.IsNullOrWhiteSpace(snapshot.Primary.Detail)
             ? snapshot.Primary.Summary
             : snapshot.Primary.Detail;
         DisplayStatusHelpText = $"Current application status: {snapshot.Primary.Source}, {snapshot.Primary.State}: {snapshot.Primary.Summary}";
         ShowStatusDock = true;
+        appliedSnapshotRevision = Math.Max(appliedSnapshotRevision, snapshot.Revision);
     }
 
     private static string NormalizeStatus(string? status) =>

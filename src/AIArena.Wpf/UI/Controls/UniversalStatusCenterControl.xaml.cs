@@ -217,7 +217,15 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
         if (!Dispatcher.CheckAccess())
         {
             Dispatcher.BeginInvoke(
-                () => StatusCenter_Changed(sender, e),
+                () =>
+                {
+                    try { StatusCenter_Changed(sender, e); }
+                    catch (Exception exception)
+                    {
+                        if (!e.IsObserverRecovery && ReferenceEquals(sender, boundStatusCenter))
+                            boundStatusCenter?.ReportPresentationFailure(exception);
+                    }
+                },
                 DispatcherPriority.DataBind);
             return;
         }
@@ -236,7 +244,6 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
     private bool ApplySnapshot(ApplicationStatusSnapshot snapshot)
     {
         if (snapshot.Revision <= appliedSnapshotRevision) return false;
-        appliedSnapshotRevision = snapshot.Revision;
         var history = snapshot.History.Select(ToPresentation).ToArray();
         var visible = snapshot.VisibleEntries.Select(ToPresentation).ToArray();
         var primary = ToPresentation(snapshot.Primary);
@@ -246,6 +253,7 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
             () => boundStatusCenter?.ClearCompleted(),
             target => boundStatusCenter?.RequestNavigation(target),
             primary);
+        appliedSnapshotRevision = Math.Max(appliedSnapshotRevision, snapshot.Revision);
         return true;
     }
 

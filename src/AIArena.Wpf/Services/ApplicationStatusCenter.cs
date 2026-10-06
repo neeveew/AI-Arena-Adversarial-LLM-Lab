@@ -96,12 +96,14 @@ public sealed class ApplicationStatusChangedEventArgs : EventArgs
         ApplicationStatusSnapshot snapshot,
         string announcement,
         ApplicationStatusAnnouncement announcementKind,
-        bool expiredOnly)
+        bool expiredOnly,
+        bool observerRecovery = false)
     {
         Snapshot = snapshot;
         Announcement = announcement;
         AnnouncementKind = announcementKind;
         ExpiredOnly = expiredOnly;
+        IsObserverRecovery = observerRecovery;
     }
 
     public ApplicationStatusSnapshot Snapshot { get; }
@@ -111,6 +113,7 @@ public sealed class ApplicationStatusChangedEventArgs : EventArgs
     public ApplicationStatusAnnouncement AnnouncementKind { get; }
 
     public bool ExpiredOnly { get; }
+    internal bool IsObserverRecovery { get; }
 }
 
 /// <summary>
@@ -852,10 +855,11 @@ public sealed class ApplicationStatusCenter
     private ApplicationStatusChangedEventArgs ChangeArgsLocked(
         string announcement,
         ApplicationStatusAnnouncement announcementKind,
-        bool expiredOnly)
+        bool expiredOnly,
+        bool observerRecovery = false)
     {
         notificationRevision++;
-        return new(BuildSnapshotLocked(), announcement, announcementKind, expiredOnly);
+        return new(BuildSnapshotLocked(), announcement, announcementKind, expiredOnly, observerRecovery);
     }
 
     private void TrimHistoryLocked()
@@ -1111,7 +1115,7 @@ public sealed class ApplicationStatusCenter
 
     private void RaiseChanged(ApplicationStatusChangedEventArgs? args)
     {
-        if (args is not null) QueueChanged(new PendingStatusNotification(args, null, true));
+        if (args is not null) QueueChanged(new PendingStatusNotification(args, true));
     }
 
     private void QueueChanged(PendingStatusNotification notification)
@@ -1150,16 +1154,13 @@ public sealed class ApplicationStatusCenter
         if (args is null || Changed is not { } changed) return;
 
         Exception? failure = null;
-        List<EventHandler<ApplicationStatusChangedEventArgs>>? failed = null;
         var observers = changed.GetInvocationList();
         foreach (EventHandler<ApplicationStatusChangedEventArgs> observer in observers)
         {
-            if (notification.ExcludedObservers?.Contains(observer) == true) continue;
             try { observer(this, args); }
             catch (Exception exception)
             {
                 failure ??= exception;
-                (failed ??= []).Add(observer);
             }
         }
         if (failure is null || !notification.ReportFailures) return;
@@ -1168,13 +1169,18 @@ public sealed class ApplicationStatusCenter
         try { warning = RecordObserverFailure(failure); }
         catch (Exception) { return; } // Diagnostics cannot invalidate an already-applied lifecycle transition.
 
-        QueueChanged(new PendingStatusNotification(warning, failed, false));
+        QueueChanged(new PendingStatusNotification(warning, false));
     }
 
     private sealed record PendingStatusNotification(
         ApplicationStatusChangedEventArgs Args,
-        IReadOnlyCollection<EventHandler<ApplicationStatusChangedEventArgs>>? ExcludedObservers,
         bool ReportFailures);
+
+    internal void ReportPresentationFailure(Exception exception)
+    {
+        try { QueueChanged(new PendingStatusNotification(RecordObserverFailure(exception), false)); }
+        catch (Exception) { } // View diagnostics cannot escape into the dispatcher.
+    }
 
     private ApplicationStatusChangedEventArgs RecordObserverFailure(Exception exception)
     {
@@ -1195,7 +1201,7 @@ public sealed class ApplicationStatusCenter
                     ApplicationStatusIdentity.Empty, background: false,
                     ApplicationStatusLifetime.UntilResolved, now, out _);
             }
-            return ChangeArgsLocked("", ApplicationStatusAnnouncement.None, expiredOnly: false);
+            return ChangeArgsLocked("", ApplicationStatusAnnouncement.None, expiredOnly: false, observerRecovery: true);
         }
     }
 }
