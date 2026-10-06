@@ -1026,79 +1026,101 @@ internal sealed class CollaborateCoordinator
         ScrollToEnd();
 
         var logicallySuccessful = false;
+        var historySaved = false;
+        Exception? presentationFailure = null;
         var completedTrace = new List<CollaborateStep>();
+        void PresentSafely(Action present)
+        {
+            try { present(); }
+            catch (Exception exception) { presentationFailure ??= exception; }
+        }
         void RecordTrace(CollaborateStep step)
         {
             completedTrace.Add(step);
-            AddTraceStep(traceItems, step);
-        }
-        void RetainInterruptedRun(string status, ApplicationStatusState state)
-        {
-            var exchange = InterruptedExchange(prompt, status, completedTrace);
-            RenderMarkdown(answerHost, exchange.Answer, 14);
-            RenderRunReview(runReviewItems, prompt, exchange.Answer, exchange.TraceSteps, status);
-            history.Add(exchange);
-            TrimHistory();
-            ApplyRunStatusAfterSave(SaveCurrentConversation(), status, state);
+            PresentSafely(() => AddTraceStep(traceItems, step));
         }
         try
         {
-            var rounds = EffectiveRounds(mode, SelectedRounds());
-            runStatusReceipt = operationStatus?.Begin($"Running {ModeLabel(mode)} ({RoundLabel(rounds)})...");
-            UpdateRunProgress($"Running {ModeLabel(mode)} ({RoundLabel(rounds)})...");
-
-            var result = mode switch
+            CollaborateExchange exchange;
+            ApplicationStatusState outcome;
+            string outcomeStatus;
+            try
             {
-                "fast" => await RunFastAsync(current, prompt, RecordTrace, cancellationToken),
-                "redteam" => await RunRedTeamAsync(current, prompt, RecordTrace, rounds, cancellationToken),
-                "critique" => await RunCritiqueAsync(current, prompt, RecordTrace, rounds, cancellationToken),
-                _ => await RunTeamDraftAsync(current, prompt, RecordTrace, rounds, cancellationToken)
-            };
-
-            var finalAnswer = string.IsNullOrWhiteSpace(result.FinalAnswer)
-                ? "No answer was produced."
-                : result.FinalAnswer;
-            RenderMarkdown(answerHost, finalAnswer, 14);
-            RenderRunReview(runReviewItems, prompt, finalAnswer, result.TraceSteps, result.Ok ? "Ready." : "Answer completed with model errors.");
-            history.Add(new CollaborateExchange(prompt, finalAnswer, result.TraceSteps.ToArray()));
+                var rounds = EffectiveRounds(mode, SelectedRounds());
+                runStatusReceipt = operationStatus?.Begin($"Running {ModeLabel(mode)} ({RoundLabel(rounds)})...");
+                UpdateRunProgress($"Running {ModeLabel(mode)} ({RoundLabel(rounds)})...");
+                var result = mode switch
+                {
+                    "fast" => await RunFastAsync(current, prompt, RecordTrace, cancellationToken),
+                    "redteam" => await RunRedTeamAsync(current, prompt, RecordTrace, rounds, cancellationToken),
+                    "critique" => await RunCritiqueAsync(current, prompt, RecordTrace, rounds, cancellationToken),
+                    _ => await RunTeamDraftAsync(current, prompt, RecordTrace, rounds, cancellationToken)
+                };
+                var finalAnswer = string.IsNullOrWhiteSpace(result.FinalAnswer)
+                    ? "No answer was produced."
+                    : result.FinalAnswer;
+                exchange = new CollaborateExchange(prompt, finalAnswer, result.TraceSteps.ToArray());
+                outcome = result.Ok ? ApplicationStatusState.Succeeded : ApplicationStatusState.Failed;
+                outcomeStatus = result.Ok ? "Ready." : "Answer completed with model errors.";
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                outcomeStatus = "Collaboration stopped.";
+                exchange = InterruptedExchange(prompt, outcomeStatus, completedTrace);
+                outcome = ApplicationStatusState.Cancelled;
+            }
+            catch (Exception exception)
+            {
+                outcomeStatus = AppErrorPresenter.Present(exception, AppErrorContext.Collaborate).DisplayText;
+                exchange = InterruptedExchange(prompt, outcomeStatus, completedTrace);
+                outcome = ApplicationStatusState.Failed;
+            }
+            // Record the outcome once. Presentation cannot replace a completed
+            // result or cause another exchange/save after this boundary.
+            history.Add(exchange);
             TrimHistory();
-            var persistenceResult = SaveCurrentConversation();
-            logicallySuccessful = result.Ok && persistenceResult.Ok;
-            ApplyRunStatusAfterSave(
-                persistenceResult,
-                result.Ok ? "Ready." : "Answer completed with model errors.", result.Ok ? ApplicationStatusState.Succeeded : ApplicationStatusState.Failed);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            const string stoppedAnswer = "Collaboration stopped.";
-            RetainInterruptedRun(stoppedAnswer, ApplicationStatusState.Cancelled);
-        }
-        catch (Exception ex)
-        {
-            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Collaborate);
-            RetainInterruptedRun(presentation.DisplayText, ApplicationStatusState.Failed);
+            var persistenceResult = SaveCurrentConversation(refreshRecent: false);
+            historySaved = persistenceResult.Ok;
+            logicallySuccessful = outcome == ApplicationStatusState.Succeeded && historySaved;
+            PresentSafely(RefreshRecentItems);
+            PresentSafely(() => ApplyRunStatusAfterSave(persistenceResult, outcomeStatus, outcome));
+            PresentSafely(() => RenderMarkdown(answerHost, exchange.Answer, 14));
+            PresentSafely(() => RenderRunReview(runReviewItems, prompt, exchange.Answer, exchange.TraceSteps, outcomeStatus));
         }
         finally
         {
-            TransitionComposerAfterRun(
+            PresentSafely(() => TransitionComposerAfterRun(
                 draftScopeAtSend,
                 visibleComposerAtSend,
-                usesVisibleComposer && logicallySuccessful);
+                usesVisibleComposer && logicallySuccessful));
             isRunning = false;
             stopButton.IsEnabled = false;
             sendButton.IsEnabled = true;
             clearButton.IsEnabled = true;
+            newChatButton.IsEnabled = true;
+            providerSettingsButton.IsEnabled = true;
             modePicker.IsEnabled = true;
+            roundsPicker.IsEnabled = !mode.Equals("fast", StringComparison.OrdinalIgnoreCase);
             promptText.IsEnabled = true;
             SetPromptAssistControlsEnabled(true);
+            SetToolControlsEnabled(true);
             runCancellation?.Dispose();
             runCancellation = null;
             runStatusReceipt = null;
-            RenderCompletedVirtualConversation();
-            RefreshProviderState();
-            RefreshRecentItems();
-            promptText.Focus();
-            ScrollToEnd();
+            PresentSafely(RenderCompletedVirtualConversation);
+            PresentSafely(RefreshProviderState);
+            PresentSafely(RefreshRecentItems);
+            PresentSafely(() => promptText.Focus());
+            PresentSafely(ScrollToEnd);
+            if (presentationFailure is not null)
+            {
+                var presentation = AppErrorPresenter.Present(presentationFailure, AppErrorContext.Collaborate);
+                var warning = historySaved
+                    ? $"Warning: the collaboration was saved, but its view could not be fully updated. Code: {presentation.Code}."
+                    : $"Warning: the collaboration view could not be fully updated. Code: {presentation.Code}.";
+                statusText.Text = AppPostCommitEvidence.AppendWarning(statusText.Text, warning);
+                PresentSafely(() => PublishStatusNotice(warning, ApplicationStatusState.Warning));
+            }
         }
     }
 
@@ -3352,7 +3374,7 @@ internal sealed class CollaborateCoordinator
         }
     }
 
-    private ConversationPersistenceResult SaveCurrentConversation()
+    private ConversationPersistenceResult SaveCurrentConversation(bool refreshRecent = true)
     {
         if (history.Count == 0)
         {
@@ -3362,7 +3384,7 @@ internal sealed class CollaborateCoordinator
         currentConversationId = UpsertConversationSnapshot(conversations, currentConversationId, history, DateTimeOffset.Now, memoryNotes);
 
         var result = PersistConversations();
-        RefreshRecentItems();
+        if (refreshRecent) RefreshRecentItems();
         return result;
     }
 
