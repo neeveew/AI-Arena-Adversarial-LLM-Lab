@@ -482,7 +482,7 @@
             <Border x:Name="MasterPane"
                     Style="{StaticResource ModelsSurfacePane}"
                     AutomationProperties.Name="Provider models master list">
-                <Grid>
+                <Grid x:Name="ModelListsLayout">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
@@ -686,7 +686,7 @@
                             </controls:StableAutomationListBox>
 
                             <Border x:Name="ModelsEmptyState"
-                                    Padding="{DynamicResource Arena.Inset.Section}"
+                                    Padding="{DynamicResource Arena.Inset.Compact}"
                                     Background="{DynamicResource InputBrush}"
                                     BorderBrush="{DynamicResource DisabledBorderBrush}"
                                     BorderThickness="1"
@@ -696,46 +696,36 @@
                                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled"
                                               Focusable="False">
-                                    <StackPanel HorizontalAlignment="Center"
-                                                VerticalAlignment="Center">
-                                        <TextBlock HorizontalAlignment="Center"
-                                                   Foreground="{DynamicResource TextBrush}"
-                                                   FontWeight="SemiBold"
-                                                   Text="No catalog models shown" />
-                                        <TextBlock x:Name="ModelsEmptyStateText"
-                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                                   Foreground="{DynamicResource MutedTextBrush}"
-                                                   Text="Refresh the provider model list or change the search."
-                                                   TextAlignment="Center"
-                                                   TextWrapping="Wrap" />
-                                        <WrapPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                                   HorizontalAlignment="Center">
-                                            <Button x:Name="EmptyRefreshButton"
-                                                    MinHeight="34"
-                                                    Margin="{DynamicResource Arena.Layout.StateCardMargin}"
-                                                    Padding="{DynamicResource Arena.Inset.Action}"
-                                                    Style="{DynamicResource Arena.Button.Primary}"
-                                                    Content="Refresh"
-                                                    Click="RefreshButton_Click"
-                                                    AutomationProperties.Name="Refresh provider models" />
-                                            <Button x:Name="EmptyConnectionButton"
-                                                    MinHeight="34"
-                                                    Margin="{DynamicResource Arena.Layout.StateCardMargin}"
-                                                    Padding="{DynamicResource Arena.Inset.Action}"
-                                                    Style="{DynamicResource Arena.Button.Secondary}"
-                                                    Content="Connection"
-                                                    Click="ConnectionButton_Click"
-                                                    AutomationProperties.Name="Open provider connection settings" />
-                                            <Button x:Name="EmptyClearFiltersButton"
-                                                    MinHeight="34"
-                                                    Margin="{DynamicResource Arena.Layout.StateCardMargin}"
-                                                    Padding="{DynamicResource Arena.Inset.Action}"
-                                                    Style="{DynamicResource Arena.Button.Quiet}"
-                                                    Content="Clear filters"
-                                                    Click="EmptyClearFiltersButton_Click"
-                                                    AutomationProperties.Name="Clear model search and filter" />
-                                        </WrapPanel>
-                                    </StackPanel>
+                                    <Grid VerticalAlignment="Center">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock x:Name="ModelsEmptyStateTitle"
+                                                       Foreground="{DynamicResource TextBrush}"
+                                                       FontWeight="SemiBold"
+                                                       Text="No catalog models shown"
+                                                       TextAlignment="Center"
+                                                       TextWrapping="Wrap" />
+                                            <TextBlock x:Name="ModelsEmptyStateText"
+                                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                       Foreground="{DynamicResource MutedTextBrush}"
+                                                       Text="Use Refresh or Connection above to check your servers."
+                                                       TextAlignment="Center"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <Button x:Name="EmptyClearFiltersButton"
+                                                Grid.Column="1"
+                                                MinHeight="34"
+                                                Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                                                VerticalAlignment="Center"
+                                                Padding="{DynamicResource Arena.Inset.Action}"
+                                                Style="{DynamicResource Arena.Button.Quiet}"
+                                                Content="Clear filters"
+                                                Click="EmptyClearFiltersButton_Click"
+                                                AutomationProperties.Name="Clear model search and filter" />
+                                    </Grid>
                                 </ScrollViewer>
                             </Border>
                         </Grid>

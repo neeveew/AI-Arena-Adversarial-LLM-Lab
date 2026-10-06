@@ -286,6 +286,9 @@ public partial class ProviderModelAssignmentsControl : UserControl
         DetailPane.PreviewMouseWheel += InlineEditor_PreviewMouseWheel;
         ModelDetailBody.SizeChanged += (_, _) => ApplyEditorLayout();
         AssignmentSettingsPanel.SizeChanged += (_, _) => ApplyEditorLayout();
+        ModelListsLayout.SizeChanged += (_, _) => UpdateLoadedListHeight();
+        LoadedModelsList.SizeChanged += (_, _) => UpdateLoadedListHeight();
+        AvailableCatalogExpander.SizeChanged += (_, _) => UpdateLoadedListHeight();
         LoadedModelsList.AddHandler(VirtualizingStackPanel.CleanUpVirtualizedItemEvent,
             new CleanUpVirtualizedItemEventHandler(ModelList_CleanUpVirtualizedItem));
         ModelsList.AddHandler(VirtualizingStackPanel.CleanUpVirtualizedItemEvent,
@@ -2554,8 +2557,6 @@ public partial class ProviderModelAssignmentsControl : UserControl
             && selectedModel is { } model
             && !IsUnconfirmedLifecycle(model)
             && TryLifecycleAction(model, out _);
-        EmptyRefreshButton.IsEnabled = RefreshButton.IsEnabled;
-        EmptyConnectionButton.IsEnabled = ConnectionButton.IsEnabled;
         EmptyClearFiltersButton.IsEnabled = true;
         if (pendingAssignment is not null)
         {
@@ -2887,10 +2888,21 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     private void UpdateLoadedListHeight()
     {
-        // Leave room for the catalog while letting a loaded model reveal its editor.
-        LoadedModelsList.MaxHeight = inlineEditorExpanded && selectedModel?.Availability == ProviderModelAvailability.Loaded
+        var cap = inlineEditorExpanded && selectedModel?.Availability == ProviderModelAvailability.Loaded
             ? Math.Clamp(WorkspaceViewport.ActualHeight - 240, 174, 520)
             : 174;
+        if (AvailableCatalogExpander.IsExpanded && LoadedModelsList.IsVisible && ModelListsLayout.ActualHeight > 0
+            && AvailableCatalogExpander.Template.FindName("HeaderToggle", AvailableCatalogExpander) is FrameworkElement header)
+        {
+            // Auto rows must leave a usable catalog viewport, even when the selected
+            // loaded model has a tall editor. Both lists keep their own scrolling.
+            var rows = ModelListsLayout.RowDefinitions;
+            var loadedChrome = rows[2].ActualHeight - LoadedModelsList.ActualHeight;
+            var available = ModelListsLayout.ActualHeight - rows[0].ActualHeight - rows[1].ActualHeight
+                - loadedChrome - AvailableCatalogExpander.Margin.Top - AvailableCatalogExpander.Margin.Bottom;
+            cap = Math.Min(cap, Math.Max(44, available - header.ActualHeight - 96));
+        }
+        if (Math.Abs(LoadedModelsList.MaxHeight - cap) > 0.5) LoadedModelsList.MaxHeight = cap;
     }
 
     private void SynchronizeSelection(ModelRowState? model)
@@ -2974,11 +2986,16 @@ public partial class ProviderModelAssignmentsControl : UserControl
         var query = committedSearchQuery;
         var catalogModelCount = modelRows.Count(model =>
             model.Availability != ProviderModelAvailability.Loaded);
-        ModelsEmptyStateText.Text = catalogModelCount == 0
-            ? "Refresh the provider model list or review the connection."
+        var loading = catalogModelCount == 0 && currentPresentation?.IsRefreshing == true;
+        ModelsEmptyStateTitle.Text = loading ? "Loading models…" : "No catalog models shown";
+        ModelsEmptyStateText.Text = loading
+            ? "Models will appear here when discovery completes."
+            : catalogModelCount == 0
+                ? "Use Refresh or Connection above to check your servers."
             : query.Length > 0
                 ? $"No models match “{NormalizeStatus(query)}” in {SelectedFacetName().ToLowerInvariant()}."
                 : $"No models match {SelectedFacetName().ToLowerInvariant()}.";
+        AutomationProperties.SetName(ModelsEmptyState, ModelsEmptyStateTitle.Text);
         AutomationProperties.SetHelpText(ModelsEmptyState, ModelsEmptyStateText.Text);
         EmptyClearFiltersButton.Visibility = catalogModelCount > 0
             && (committedSearchQuery.Length > 0 || selectedFacet != ProviderModelFacet.All)
@@ -3376,7 +3393,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         AutomationProperties.SetItemStatus(CatalogSummaryText, $"{modelRows.Count} total models");
         LoadedModelsCountText.Text = loaded.ToString();
         AvailableCatalogCountText.Text = (available + unavailable).ToString();
-        LoadedModelsEmptyState.Visibility = loaded == 0
+        LoadedModelsEmptyState.Visibility = loaded == 0 && modelRows.Count > 0
             ? Visibility.Visible
             : Visibility.Collapsed;
         LoadedModelsList.Visibility = loaded == 0

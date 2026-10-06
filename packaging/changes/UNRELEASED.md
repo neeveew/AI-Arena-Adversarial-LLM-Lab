@@ -9,6 +9,7 @@ Changes after `0.4.145-beta`:
 - Isolate failing status-view subscribers so owned operation receipts still return, later subscribers receive updates, and Agent/Collaborate calls preserve their real outcomes. Coalesce a privacy-safe warning with one bounded recovery notification.
 - Deliver status snapshots in revision order through nested and concurrent publication. Bound notification bursts, retain the latest complete state, and reject stale queued updates or events from an old status-card binding.
 - Recover top-bar and status-card projections after one-time property or collection callback failures. Mark revisions applied only after rendering completes, and contain queued dispatcher failures without an unbounded retry loop.
+- Keep the Models catalog reachable beside an expanded loaded-model editor in short windows. Compact the empty state, reuse the header's Connection and Refresh actions, distinguish discovery from a completed empty result, and keep Clear filters visible without hiding loaded models.
 
 Verification evidence for this development increment is under
 `artifacts/bugfix-2026-10-06-collaborate-postsave/`. It remains outside the frozen
@@ -25,3 +26,6 @@ Status-ordering verification is under
 
 Partial projection recovery verification is under
 `artifacts/bugfix-2026-10-06-status-recovery/`.
+
+Compact Models empty-state verification is under
+`artifacts/bugfix-2026-10-06-models-empty-state/`.

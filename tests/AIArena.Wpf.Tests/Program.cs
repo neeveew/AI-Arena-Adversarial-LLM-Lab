@@ -631,6 +631,8 @@ var tests = new List<(string Name, Action Test)>
     ("provider Models inline editor survives virtualized row recycling", ProviderModelsInlineEditorSurvivesVirtualizedRowRecycling),
     ("provider Models pinned layout keeps Loaded visible and catalog disclosure stable", ProviderModelsPinnedLayoutKeepsLoadedVisibleAndCatalogDisclosureStable),
     ("provider Models pinned layout moves selection and uses accessible switches", ProviderModelsPinnedLayoutMovesSelectionAndUsesAccessibleSwitches),
+    ("provider Models empty state keeps recovery actions unique and truthful", ProviderModelsEmptyStateKeepsRecoveryActionsUniqueAndTruthful),
+    ("provider Models empty state clears filters without hiding loaded models", ProviderModelsEmptyStateClearsFiltersWithoutHidingLoadedModels),
     ("universal status center keeps four stable newest-first rows", UniversalStatusCenterKeepsFourStableNewestFirstRows),
     ("universal status center clock is deadline driven and bounds closed history work", UniversalStatusCenterClockIsDeadlineDrivenAndBoundsClosedHistoryWork),
     ("universal status center dashboard filters and restores focus", UniversalStatusCenterDashboardFiltersAndRestoresFocus),
