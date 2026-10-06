@@ -113,8 +113,15 @@ internal static class AppPostCommitEvidence
         var exception = await PostCommitEvidence.TryCompleteAsync(completion);
         if (exception is null) return "";
 
+        return CompletionWarning(exception, failureSummary, context, saved: true);
+    }
+
+    internal static string CompletionWarning(
+        Exception exception, string failureSummary, AppErrorContext context, bool saved)
+    {
         var presentation = AppErrorPresenter.Present(exception, context);
-        return $"Warning: the change was saved, but {failureSummary}. "
+        var prefix = saved ? "Warning: the change was saved, but " : "Warning: ";
+        return $"{prefix}{failureSummary}. "
             + $"Code: {presentation.Code}.";
     }
 

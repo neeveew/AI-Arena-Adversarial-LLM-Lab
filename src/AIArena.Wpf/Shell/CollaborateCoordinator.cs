@@ -727,23 +727,16 @@ internal sealed class CollaborateCoordinator
             return;
         }
 
-        var note = ShellUiHelpers.Truncate(memoryText.Text.Trim(), MaxMemoryNoteChars, ShellUiHelpers.TruncatedNoticeSuffix);
+        var draft = memoryText.Text;
+        var note = ShellUiHelpers.Truncate(draft.Trim(), MaxMemoryNoteChars, ShellUiHelpers.TruncatedNoticeSuffix);
         if (string.IsNullOrWhiteSpace(note))
         {
             memoryText.Focus();
             return;
         }
 
-        var normalized = NormalizeMemoryNotes(new[] { note }.Concat(memoryNotes));
-        memoryNotes.Clear();
-        memoryNotes.AddRange(normalized);
-
-        memoryText.Clear();
-        RefreshToolItems();
-        var persistenceResult = SaveToolContextForCurrentConversation();
-        UpdateStatus(persistenceResult.Ok
-            ? MemoryNoteSavedStatus(history.Count)
-            : persistenceResult.Message);
+        ApplyMemoryNotes(NormalizeMemoryNotes(new[] { note }.Concat(memoryNotes)),
+            MemoryNoteSavedStatus(history.Count), draft);
     }
 
     public void ClearMemoryNotes()
@@ -753,12 +746,39 @@ internal sealed class CollaborateCoordinator
             return;
         }
 
+        ApplyMemoryNotes([], MemoryNotesClearedStatus(history.Count));
+    }
+
+    private void ApplyMemoryNotes(IReadOnlyList<string> notes, string successStatus, string? consumedDraft = null)
+    {
+        var previousNotes = memoryNotes.ToArray();
+        var previousConversations = conversations.ToArray();
+        var previousConversationId = currentConversationId;
         memoryNotes.Clear();
-        RefreshToolItems();
-        var persistenceResult = SaveToolContextForCurrentConversation();
-        UpdateStatus(persistenceResult.Ok
-            ? MemoryNotesClearedStatus(history.Count)
-            : persistenceResult.Message);
+        memoryNotes.AddRange(notes);
+        var persistence = SaveCurrentConversation();
+        if (!persistence.Ok)
+        {
+            memoryNotes.Clear();
+            memoryNotes.AddRange(previousNotes);
+            conversations.Clear();
+            conversations.AddRange(previousConversations);
+            currentConversationId = previousConversationId;
+        }
+
+        var presentation = new ConversationPresentationCompletion(AppErrorContext.Collaborate);
+        if (persistence.Ok && consumedDraft is not null && memoryText.Text == consumedDraft)
+            presentation.Try(memoryText.Clear);
+        presentation.Try(RefreshToolItems);
+        presentation.Try(RefreshRecentItems);
+        var outcome = persistence.Ok ? successStatus : persistence.Message;
+        presentation.Try(() => UpdateStatus(outcome, persistence.Ok ? ApplicationStatusState.Info : ApplicationStatusState.Failed));
+        if (presentation.HasFailure)
+        {
+            var warning = presentation.Warning(saved: persistence.Ok && history.Count > 0);
+            presentation.Try(() => UpdateStatus(AppPostCommitEvidence.AppendWarning(outcome, warning),
+                persistence.Ok ? ApplicationStatusState.Warning : ApplicationStatusState.Failed));
+        }
     }
 
     public void UpdateRecentSearch(string query)
@@ -994,53 +1014,43 @@ internal sealed class CollaborateCoordinator
             return;
         }
 
-        CancelDocumentImportForContextTransition();
-        isRunning = true;
-        runCancellation?.Dispose();
-        runCancellation = new CancellationTokenSource();
-        var cancellationToken = runCancellation.Token;
-        sendButton.IsEnabled = false;
-        stopButton.IsEnabled = true;
-        clearButton.IsEnabled = false;
-        newChatButton.IsEnabled = false;
-        providerSettingsButton.IsEnabled = false;
-        modePicker.IsEnabled = false;
-        roundsPicker.IsEnabled = false;
-        promptText.IsEnabled = false;
-        SetPromptAssistControlsEnabled(false);
-        SetToolControlsEnabled(false);
-        RefreshRecentItems();
-
-        if (history.Count == 0)
-        {
-            ClearMessagePresentation();
-        }
-
-        var pendingExchangeKey = $"collaborate-live-{Guid.NewGuid():N}";
-        AddUserMessage(prompt, $"{pendingExchangeKey}-user");
-        var answerHost = AddAssistantMessage(
-            out var traceItems,
-            out var runReviewItems,
-            $"{pendingExchangeKey}-assistant");
-        NotifyAssistantResponseStarted();
-        ScrollToEnd();
-
         var logicallySuccessful = false;
         var historySaved = false;
-        Exception? presentationFailure = null;
-        var completedTrace = new List<CollaborateStep>();
-        void PresentSafely(Action present)
-        {
-            try { present(); }
-            catch (Exception exception) { presentationFailure ??= exception; }
-        }
-        void RecordTrace(CollaborateStep step)
-        {
-            completedTrace.Add(step);
-            PresentSafely(() => AddTraceStep(traceItems, step));
-        }
+        var preflightComplete = false;
+        var presentation = new ConversationPresentationCompletion(AppErrorContext.Collaborate);
+        isRunning = true;
         try
         {
+            CancelDocumentImportForContextTransition();
+            runCancellation?.Dispose();
+            runCancellation = new CancellationTokenSource();
+            var cancellationToken = runCancellation.Token;
+            sendButton.IsEnabled = false;
+            stopButton.IsEnabled = true;
+            clearButton.IsEnabled = false;
+            newChatButton.IsEnabled = false;
+            providerSettingsButton.IsEnabled = false;
+            modePicker.IsEnabled = false;
+            roundsPicker.IsEnabled = false;
+            promptText.IsEnabled = false;
+            SetPromptAssistControlsEnabled(false);
+            SetToolControlsEnabled(false);
+            presentation.Try(RefreshRecentItems);
+
+            if (history.Count == 0) ClearMessagePresentation();
+            var pendingExchangeKey = $"collaborate-live-{Guid.NewGuid():N}";
+            AddUserMessage(prompt, $"{pendingExchangeKey}-user");
+            var answerHost = AddAssistantMessage(out var traceItems, out var runReviewItems,
+                $"{pendingExchangeKey}-assistant");
+            NotifyAssistantResponseStarted();
+            presentation.Try(ScrollToEnd);
+            preflightComplete = true;
+            var completedTrace = new List<CollaborateStep>();
+            void RecordTrace(CollaborateStep step)
+            {
+                completedTrace.Add(step);
+                presentation.Try(() => AddTraceStep(traceItems, step));
+            }
             CollaborateExchange exchange;
             ApplicationStatusState outcome;
             string outcomeStatus;
@@ -1079,17 +1089,23 @@ internal sealed class CollaborateCoordinator
             // result or cause another exchange/save after this boundary.
             history.Add(exchange);
             TrimHistory();
-            var persistenceResult = SaveCurrentConversation(refreshRecent: false);
+            var persistenceResult = SaveCurrentConversation();
             historySaved = persistenceResult.Ok;
             logicallySuccessful = outcome == ApplicationStatusState.Succeeded && historySaved;
-            PresentSafely(RefreshRecentItems);
-            PresentSafely(() => ApplyRunStatusAfterSave(persistenceResult, outcomeStatus, outcome));
-            PresentSafely(() => RenderMarkdown(answerHost, exchange.Answer, 14));
-            PresentSafely(() => RenderRunReview(runReviewItems, prompt, exchange.Answer, exchange.TraceSteps, outcomeStatus));
+            presentation.Try(RefreshRecentItems);
+            presentation.Try(() => ApplyRunStatusAfterSave(persistenceResult, outcomeStatus, outcome));
+            presentation.Try(() => RenderMarkdown(answerHost, exchange.Answer, 14));
+            presentation.Try(() => RenderRunReview(runReviewItems, prompt, exchange.Answer, exchange.TraceSteps, outcomeStatus));
+        }
+        catch (Exception exception) when (!preflightComplete)
+        {
+            var failure = AppErrorPresenter.Present(exception, AppErrorContext.Collaborate);
+            presentation.Try(() => UpdateStatus(failure.DisplayText, ApplicationStatusState.Failed));
+            presentation.Try(RestoreCurrentConversationPresentation);
         }
         finally
         {
-            PresentSafely(() => TransitionComposerAfterRun(
+            presentation.Try(() => TransitionComposerAfterRun(
                 draftScopeAtSend,
                 visibleComposerAtSend,
                 usesVisibleComposer && logicallySuccessful));
@@ -1107,19 +1123,17 @@ internal sealed class CollaborateCoordinator
             runCancellation?.Dispose();
             runCancellation = null;
             runStatusReceipt = null;
-            PresentSafely(RenderCompletedVirtualConversation);
-            PresentSafely(RefreshProviderState);
-            PresentSafely(RefreshRecentItems);
-            PresentSafely(() => promptText.Focus());
-            PresentSafely(ScrollToEnd);
-            if (presentationFailure is not null)
+            presentation.Try(RenderCompletedVirtualConversation);
+            presentation.Try(RefreshProviderState);
+            presentation.Try(RefreshRecentItems);
+            presentation.Try(() => promptText.Focus());
+            presentation.Try(ScrollToEnd);
+            if (presentation.HasFailure)
             {
-                var presentation = AppErrorPresenter.Present(presentationFailure, AppErrorContext.Collaborate);
-                var warning = historySaved
-                    ? $"Warning: the collaboration was saved, but its view could not be fully updated. Code: {presentation.Code}."
-                    : $"Warning: the collaboration view could not be fully updated. Code: {presentation.Code}.";
+                var warning = presentation.Warning(historySaved);
                 statusText.Text = AppPostCommitEvidence.AppendWarning(statusText.Text, warning);
-                PresentSafely(() => PublishStatusNotice(warning, ApplicationStatusState.Warning));
+                presentation.Try(() => PublishStatusNotice(warning,
+                    preflightComplete ? ApplicationStatusState.Warning : ApplicationStatusState.Failed));
             }
         }
     }
@@ -1136,6 +1150,14 @@ internal sealed class CollaborateCoordinator
         {
             RenderConversation(conversation);
         }
+    }
+
+    private void RestoreCurrentConversationPresentation()
+    {
+        var conversation = currentConversationId is Guid id
+            ? conversations.FirstOrDefault(item => item.Id == id) : null;
+        if (conversation is not null) RenderConversation(conversation);
+        else RenderEmptyState();
     }
 
     private async Task<CollaborateRunResult> RunFastAsync(
@@ -3374,7 +3396,7 @@ internal sealed class CollaborateCoordinator
         }
     }
 
-    private ConversationPersistenceResult SaveCurrentConversation(bool refreshRecent = true)
+    private ConversationPersistenceResult SaveCurrentConversation()
     {
         if (history.Count == 0)
         {
@@ -3383,14 +3405,7 @@ internal sealed class CollaborateCoordinator
 
         currentConversationId = UpsertConversationSnapshot(conversations, currentConversationId, history, DateTimeOffset.Now, memoryNotes);
 
-        var result = PersistConversations();
-        if (refreshRecent) RefreshRecentItems();
-        return result;
-    }
-
-    private ConversationPersistenceResult SaveToolContextForCurrentConversation()
-    {
-        return history.Count == 0 ? ConversationPersistenceResult.Success : SaveCurrentConversation();
+        return PersistConversations();
     }
 
     private void ApplyRunStatusAfterSave(

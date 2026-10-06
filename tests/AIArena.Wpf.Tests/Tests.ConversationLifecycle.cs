@@ -403,12 +403,13 @@ internal static partial class Program
     private static CollaborateCoordinator CreateLifecycleCollaborate(IModelProviderClient client, TextBox prompt,
         TextBlock status, Panel panel, ApplicationStatusCenter center, string mode,
         CollaborateHistoryStore? historyStore = null,
-        Func<string, Brush>? resourceBrush = null)
+        Func<string, Brush>? resourceBrush = null,
+        CollaborateWorkflowTestUi? testUi = null)
     {
-        var modePicker = new ComboBox();
+        var modePicker = testUi?.Mode ?? new ComboBox();
         modePicker.Items.Add(new ComboBoxItem { Content = mode, Tag = mode });
         modePicker.SelectedIndex = 0;
-        var roundsPicker = new ComboBox();
+        var roundsPicker = testUi?.Rounds ?? new ComboBox();
         roundsPicker.Items.Add(new ComboBoxItem { Content = "1", Tag = "1" });
         roundsPicker.SelectedIndex = 0;
         return new CollaborateCoordinator(
@@ -423,9 +424,9 @@ internal static partial class Program
             explainPromptButton: new Button(),
             promptBudgetText: new TextBlock(),
             contextReceiptButton: new Button(),
-            sendButton: new Button(),
-            stopButton: new Button(),
-            clearButton: new Button(),
+            sendButton: testUi?.Send ?? new Button(),
+            stopButton: testUi?.Stop ?? new Button(),
+            clearButton: testUi?.Clear ?? new Button(),
             modePicker: modePicker,
             roundsPicker: roundsPicker,
             statusText: status,
@@ -435,8 +436,8 @@ internal static partial class Program
             topTeamText: new TextBlock(),
             participantItems: new StackPanel(),
             recentItems: new StackPanel(),
-            newChatButton: new Button(),
-            providerSettingsButton: new Button(),
+            newChatButton: testUi?.NewChat ?? new Button(),
+            providerSettingsButton: testUi?.Provider ?? new Button(),
             toolDocumentItems: new StackPanel(),
             addDocumentButton: new Button(),
             clearDocumentsButton: new Button(),
@@ -444,7 +445,7 @@ internal static partial class Program
             runCalculatorButton: new Button(),
             clearCalculationsButton: new Button(),
             calculationItems: new StackPanel(),
-            memoryText: new TextBox(),
+            memoryText: testUi?.Memory ?? new TextBox(),
             saveMemoryButton: new Button(),
             clearMemoryButton: new Button(),
             memoryItems: new StackPanel(),
