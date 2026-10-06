@@ -4587,7 +4587,14 @@ static void ReleaseScriptsProtectInstallerDistributions()
         && !(dependencyLockBytes[0] == 0xEF && dependencyLockBytes[1] == 0xBB && dependencyLockBytes[2] == 0xBF)
         && !dependencyLock.Contains("\r\n", StringComparison.Ordinal),
         "Python dependency lock must remain LF-only UTF-8 without a BOM so its aggregate digest is reproducible");
-    const string reviewedDependencyLockSha256 = "CD3EFDAA7834D1860BD45690279D40BFEDE5264F6EF0C03EB04C03BE985F899E";
+    const string reviewedWerkzeugLock = "werkzeug==3.1.9 --hash=sha256:6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab";
+    var werkzeugLocks = dependencyLock.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        .Select(line => line.Trim())
+        .Where(line => Regex.IsMatch(line, @"^werkzeug(?:==|\[|\s|@)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        .ToArray();
+    Require(werkzeugLocks.Length == 1 && werkzeugLocks[0] == reviewedWerkzeugLock,
+        "Python dependency lock must contain only the reviewed Werkzeug 3.1.9 security wheel for GHSA-g6x2-hccm-hh4m");
+    const string reviewedDependencyLockSha256 = "87C75DC40EB50D733B026F22945D43AD55D381256632592DB74F09757ECF3961";
     var actualDependencyLockSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(dependencyLockBytes));
     using (var upstreamLockDocument = JsonDocument.Parse(upstreamLock))
     {

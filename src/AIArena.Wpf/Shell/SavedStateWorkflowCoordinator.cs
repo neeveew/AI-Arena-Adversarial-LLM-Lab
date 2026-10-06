@@ -40,6 +40,7 @@ internal sealed class SavedStateWorkflowCoordinator
 
     private readonly Window owner;
     private readonly SessionStore sessionStore;
+    private readonly Func<string, Task<IReadOnlyList<CheckpointSummary>>> listCheckpointsAsync;
     private readonly EventLogStore eventLogStore;
     private readonly ScenarioTemplateStore scenarioTemplateStore;
     private readonly ComboBox modePicker;
@@ -80,6 +81,7 @@ internal sealed class SavedStateWorkflowCoordinator
     private bool pendingDeletionUndoArmed;
     private bool isUpdating;
     private long selectionVersion;
+    private long checkpointRefreshVersion;
 
     /// <summary>
     /// When true the picker also lists sessions that never received a turn.
@@ -121,10 +123,12 @@ internal sealed class SavedStateWorkflowCoordinator
         Action<string> setArenaRunStatus,
         Action<string> setLoadStatus,
         CheckBox? showEmptySessionsCheckBox = null,
-        Func<CoreSessionSummary, bool, Task<bool>>? tryLoadSessionAsync = null)
+        Func<CoreSessionSummary, bool, Task<bool>>? tryLoadSessionAsync = null,
+        Func<string, Task<IReadOnlyList<CheckpointSummary>>>? listCheckpointsAsync = null)
     {
         this.owner = owner;
         this.sessionStore = sessionStore;
+        this.listCheckpointsAsync = listCheckpointsAsync ?? (sessionId => sessionStore.ListCheckpointsAsync(sessionId));
         this.eventLogStore = eventLogStore;
         this.scenarioTemplateStore = scenarioTemplateStore;
         this.modePicker = modePicker;
@@ -357,21 +361,27 @@ internal sealed class SavedStateWorkflowCoordinator
 
     private async Task RefreshCheckpointsSafelyAsync(string? capturedSessionId)
     {
+        var request = CaptureSavedRequest(capturedSessionId ?? "");
+        var refreshVersion = ++checkpointRefreshVersion;
         try
         {
-            await RefreshCheckpointsAsync();
+            await RefreshCheckpointsCoreAsync(refreshVersion);
         }
         catch (Exception ex)
         {
-            if (string.IsNullOrWhiteSpace(capturedSessionId)
-                || ShouldApplyCheckpointRefresh(capturedSessionId, activeSession()?.Id))
+            if (refreshVersion == checkpointRefreshVersion
+                && request.Mode.Equals("checkpoint", StringComparison.OrdinalIgnoreCase)
+                && SavedRequestIsCurrent(request))
             {
                 SetStatus(CheckpointRefreshFailureStatus(ex), isDanger: true);
             }
         }
     }
 
-    public async Task RefreshCheckpointsAsync(string? selectedCheckpointId = null)
+    public Task RefreshCheckpointsAsync(string? selectedCheckpointId = null) =>
+        RefreshCheckpointsCoreAsync(++checkpointRefreshVersion, selectedCheckpointId);
+
+    private async Task RefreshCheckpointsCoreAsync(long refreshVersion, string? selectedCheckpointId = null)
     {
         var session = activeSession();
         if (session is null)
@@ -382,8 +392,9 @@ internal sealed class SavedStateWorkflowCoordinator
 
         var sessionId = session.Id;
         var requestedSelectionVersion = selectionVersion;
-        var summaries = await sessionStore.ListCheckpointsAsync(sessionId);
-        if (!ShouldApplyCheckpointRefresh(sessionId, activeSession()?.Id))
+        var summaries = await listCheckpointsAsync(sessionId);
+        if (refreshVersion != checkpointRefreshVersion
+            || !ShouldApplyCheckpointRefresh(sessionId, activeSession()?.Id))
         {
             return;
         }
@@ -414,6 +425,8 @@ internal sealed class SavedStateWorkflowCoordinator
 
     public void ClearCheckpoints(string status)
     {
+        // Pending reads and their error notices no longer own an explicitly cleared view.
+        checkpointRefreshVersion++;
         checkpointSummaries = [];
         if (CurrentMode().Equals("checkpoint", StringComparison.OrdinalIgnoreCase))
         {
