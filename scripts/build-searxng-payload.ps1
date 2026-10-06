@@ -70,6 +70,10 @@ $actualDependencyLockHash = (Get-FileHash -LiteralPath $dependencyLockFull -Algo
 if ($actualDependencyLockHash -ne $DependencyLockSha256.ToUpperInvariant()) {
     throw "Reviewed Python dependency lock failed SHA-256 verification. Expected $DependencyLockSha256, found $actualDependencyLockHash."
 }
+$pathRegressionScript = Join-Path $PSScriptRoot 'tests\searxng-windows-paths.tests.py'
+if (-not (Test-Path -LiteralPath $pathRegressionScript -PathType Leaf)) {
+    throw 'Bundled Windows path-security regression script is missing.'
+}
 
 if ([string]::IsNullOrWhiteSpace($DownloadDir)) {
     $DownloadDir = Join-Path $repoRoot "artifacts\downloads"
@@ -520,6 +524,7 @@ $probeFile = Join-Path $workDir "probe.py"
 Set-Content -LiteralPath $probeFile -Value $importProbe -Encoding UTF8
 $payloadPython = Join-Path $pythonDir "python.exe"
 Invoke-AIArenaNativeCommand -FilePath $payloadPython -ArgumentList @($probeFile) -Label 'Bundled SearXNG import probe'
+Invoke-AIArenaNativeCommand -FilePath $payloadPython -ArgumentList @('-B', $pathRegressionScript, $payloadDir) -Label 'Bundled Windows path and gateway regressions'
 
 Get-ChildItem -LiteralPath $payloadDir -Directory -Recurse -Filter "__pycache__" -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force

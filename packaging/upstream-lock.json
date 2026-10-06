@@ -21,6 +21,6 @@
     "lockFile": "packaging/searxng-requirements-lock.txt",
     "platform": "win_amd64",
     "pythonAbi": "cp311",
-    "sha256": "CD3EFDAA7834D1860BD45690279D40BFEDE5264F6EF0C03EB04C03BE985F899E"
+    "sha256": "87C75DC40EB50D733B026F22945D43AD55D381256632592DB74F09757ECF3961"
   }
 }
