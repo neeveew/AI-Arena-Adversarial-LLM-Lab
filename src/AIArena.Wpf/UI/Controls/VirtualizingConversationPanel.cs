@@ -626,8 +626,18 @@ public sealed class VirtualizingConversationPanel : StackPanel
             return;
         }
 
-        var element = row.Factory()
-            ?? throw new InvalidOperationException("A conversation row factory returned null.");
+        UIElement element;
+        try
+        {
+            element = row.Factory()
+                ?? throw new InvalidOperationException("A conversation row factory returned null.");
+            if (VisualTreeHelper.GetParent(element) is not null || LogicalTreeHelper.GetParent(element) is not null)
+                throw new InvalidOperationException("A conversation row factory returned an already-owned element.");
+        }
+        catch (Exception exception)
+        {
+            element = CreateDisplayFallback(row, exception);
+        }
         row.Element = element;
         var visualIndex = rows
             .TakeWhile(candidate => !ReferenceEquals(candidate, row))
@@ -635,6 +645,79 @@ public sealed class VirtualizingConversationPanel : StackPanel
         InternalChildren.Insert(visualIndex, element);
         elementCreationCount++;
         RestoreViewState(element, row.ViewState);
+    }
+
+    private UIElement CreateDisplayFallback(ConversationRow row, Exception exception)
+    {
+        // Avoid the failing card factory and its theme resources. Public row
+        // descriptions remain readable while the original factory stays retryable.
+        var code = AppErrorPresenter.Present(exception, AppErrorContext.AppFatal).Code;
+        var content = new StackPanel();
+        content.Children.Add(new TextBlock
+        {
+            Text = row.AutomationName,
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = "Message layout unavailable. Showing retained text.",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0)
+        });
+        if (!string.IsNullOrWhiteSpace(row.AutomationHelpText))
+            content.Children.Add(new TextBlock
+            {
+                Text = row.AutomationHelpText,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 8, 0, 0)
+            });
+        var highContrast = SystemParameters.HighContrast;
+        var retry = new Button
+        {
+            Content = "Retry display",
+            Foreground = highContrast ? SystemColors.ControlTextBrush : Brushes.Black,
+            Background = highContrast ? SystemColors.ControlBrush : Brushes.WhiteSmoke,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 8, 0, 0),
+            Padding = new Thickness(8, 6, 8, 6),
+            ToolTip = "Try displaying this message again. No model request is made."
+        };
+        AutomationProperties.SetName(retry, "Retry message display");
+        AutomationProperties.SetHelpText(retry, retry.ToolTip.ToString());
+        var pendingRetry = false;
+        retry.Click += (_, _) =>
+        {
+            if (pendingRetry) return;
+            pendingRetry = true;
+            Dispatcher.BeginInvoke(() =>
+            {
+                pendingRetry = false;
+                if (!rows.Contains(row) || !ReferenceEquals(row.Element, content.Parent)) return;
+                var anchor = CaptureAnchor();
+                Unrealize(row, preserveViewState: true);
+                Realize(row);
+                RestoreAnchor(anchor);
+                InvalidateMeasure();
+            }, DispatcherPriority.Background);
+        };
+        content.Children.Add(retry);
+        var card = new Border
+        {
+            Child = content,
+            Padding = new Thickness(12),
+            Margin = new Thickness(0, 0, 0, 8),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Background = highContrast ? SystemColors.WindowBrush : new SolidColorBrush(Color.FromRgb(18, 27, 40)),
+            BorderBrush = highContrast ? SystemColors.HighlightBrush : Brushes.LightCoral
+        };
+        TextElement.SetForeground(card, highContrast ? SystemColors.WindowTextBrush : Brushes.White);
+        AutomationProperties.SetName(card, row.AutomationName);
+        AutomationProperties.SetHelpText(card, $"Message display unavailable. {code}");
+        AutomationProperties.SetItemStatus(card, "Display unavailable");
+        AutomationProperties.SetLiveSetting(card, AutomationLiveSetting.Polite);
+        return card;
     }
 
     private void Unrealize(ConversationRow row, bool preserveViewState)
