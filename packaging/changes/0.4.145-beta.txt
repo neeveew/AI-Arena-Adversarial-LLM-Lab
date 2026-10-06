@@ -1,0 +1,20 @@
+AI Arena - Lite 0.4.145-beta
+
+Changes since 0.4.144-beta:
+
+- Preserve saved turn, narrator, operator, decision-card, and recovery outcomes when activity logging, refresh, or speech fails afterward. Show a warning alongside the saved result instead of reporting a failed action or inviting duplicate sends.
+- Serialize transcript pin and delete actions with other arena operations and shutdown. Record successful edits only after the snapshot is saved, and describe the actual saved pin state.
+- Preserve whitespace and indentation in compatible provider multipart completions and streamed content parts.
+- Handle multiple LM Studio message blocks consistently during streaming and completion, preserving their text and accepted partial output if the server fails.
+- Keep empty model-catalog actions reachable by scrolling when a compact window leaves too little vertical space.
+- Use each assigned model's saved server, adapter, credentials, context, and request options in AI Collaborate. Preserve distinct-server fallback even when both servers advertise the same model name, and recognize legacy assignments by their complete connection identity.
+- Share provider request copying and response-tone handling across Arena, Agent, and AI Collaborate. Agent retains its saved shared-provider options and zero temperature; Collaborate applies the assigned model's saved tone.
+- Share bounded reasoning-only recovery across Arena, Agent, and AI Collaborate. Workspace calls use fresh server capabilities, support one off/low reduction without changing saved preferences or prompts, and honor cancellation and terminal failure states.
+- Fit workspace output allowance against the configured and observed loaded context. Reject prompts that cannot leave useful answer space before calling the model, preserving the original input and avoiding a fallback that would bypass the context failure.
+- Preserve failed public partial answers in Agent and Collaborate output and trace history. Prevent fallback from replacing accepted partial output across app workflows, and reject late Agent streaming updates after their card is removed.
+- Retain accepted Agent streaming text when Stop cancels the call or the provider throws. Mark it as a partial response, preserve the draft, and keep unfinished commands out of the approval flow. Freeze acceptance before cancellation so late provider output cannot change the retained result or revive Writing.
+- Resolve conflicting legacy retry memories from retained evidence without rewriting their history. Preserve manual corrections, migrated summaries, unrelated facts, and records outside the bounded notes editor.
+- Reject inherited test filters during release verification, and compare generated guide content consistently across LF and CRLF checkouts.
+- Preserve completed AI Collaborate team steps and usage when a later role stops or fails. Keep the interrupted review state in saved chats, reopened conversations, recent items, and exports.
+
+Retains the audited installer packaging and bundled AnyIO 4.14.2 security patch from 0.4.144-beta.

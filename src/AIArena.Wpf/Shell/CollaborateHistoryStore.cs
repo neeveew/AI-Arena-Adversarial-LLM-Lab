@@ -114,6 +114,7 @@ internal class CollaborateHistoryStore
         {
             Prompt = exchange.Prompt ?? "",
             Answer = exchange.Answer ?? "",
+            Interrupted = exchange.Interrupted,
             TraceSteps = (exchange.TraceSteps ?? [])
                 .OfType<CollaborateHistoryStep>()
                 .Select(NormalizeStep)
@@ -158,6 +159,7 @@ internal sealed class CollaborateHistoryExchange
 {
     public string Prompt { get; set; } = "";
     public string Answer { get; set; } = "";
+    public bool Interrupted { get; set; }
     public List<CollaborateHistoryStep> TraceSteps { get; set; } = [];
 }
 

@@ -908,7 +908,7 @@ internal sealed class CollaborateCoordinator
                 0, 0, 0, 0, [], "Run a collaboration first.", true, []);
         }
 
-        var review = BuildRunReview(exchange.Prompt, exchange.Answer, exchange.TraceSteps, "Saved run.");
+        var review = BuildRunReview(exchange.Prompt, exchange.Answer, exchange.TraceSteps, ExchangeReviewOutcome(exchange, "Saved run."));
         var metrics = ConversationMetrics(conversation);
         var trace = exchange.TraceSteps.Select(step => new AIArenaCollaborateTraceControlState(
             step.RoleId,
@@ -1026,6 +1026,21 @@ internal sealed class CollaborateCoordinator
         ScrollToEnd();
 
         var logicallySuccessful = false;
+        var completedTrace = new List<CollaborateStep>();
+        void RecordTrace(CollaborateStep step)
+        {
+            completedTrace.Add(step);
+            AddTraceStep(traceItems, step);
+        }
+        void RetainInterruptedRun(string status, ApplicationStatusState state)
+        {
+            var exchange = InterruptedExchange(prompt, status, completedTrace);
+            RenderMarkdown(answerHost, exchange.Answer, 14);
+            RenderRunReview(runReviewItems, prompt, exchange.Answer, exchange.TraceSteps, status);
+            history.Add(exchange);
+            TrimHistory();
+            ApplyRunStatusAfterSave(SaveCurrentConversation(), status, state);
+        }
         try
         {
             var rounds = EffectiveRounds(mode, SelectedRounds());
@@ -1034,10 +1049,10 @@ internal sealed class CollaborateCoordinator
 
             var result = mode switch
             {
-                "fast" => await RunFastAsync(current, prompt, traceItems, cancellationToken),
-                "redteam" => await RunRedTeamAsync(current, prompt, traceItems, rounds, cancellationToken),
-                "critique" => await RunCritiqueAsync(current, prompt, traceItems, rounds, cancellationToken),
-                _ => await RunTeamDraftAsync(current, prompt, traceItems, rounds, cancellationToken)
+                "fast" => await RunFastAsync(current, prompt, RecordTrace, cancellationToken),
+                "redteam" => await RunRedTeamAsync(current, prompt, RecordTrace, rounds, cancellationToken),
+                "critique" => await RunCritiqueAsync(current, prompt, RecordTrace, rounds, cancellationToken),
+                _ => await RunTeamDraftAsync(current, prompt, RecordTrace, rounds, cancellationToken)
             };
 
             var finalAnswer = string.IsNullOrWhiteSpace(result.FinalAnswer)
@@ -1053,24 +1068,15 @@ internal sealed class CollaborateCoordinator
                 persistenceResult,
                 result.Ok ? "Ready." : "Answer completed with model errors.", result.Ok ? ApplicationStatusState.Succeeded : ApplicationStatusState.Failed);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             const string stoppedAnswer = "Collaboration stopped.";
-            RenderMarkdown(answerHost, stoppedAnswer, 14);
-            RenderRunReview(runReviewItems, prompt, stoppedAnswer, [], stoppedAnswer);
-            history.Add(InterruptedExchange(prompt, stoppedAnswer));
-            TrimHistory();
-            ApplyRunStatusAfterSave(SaveCurrentConversation(), stoppedAnswer, ApplicationStatusState.Cancelled);
+            RetainInterruptedRun(stoppedAnswer, ApplicationStatusState.Cancelled);
         }
         catch (Exception ex)
         {
             var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Collaborate);
-            var failureAnswer = presentation.DisplayText;
-            RenderMarkdown(answerHost, failureAnswer, 14);
-            RenderRunReview(runReviewItems, prompt, failureAnswer, [], presentation.DisplayText);
-            history.Add(InterruptedExchange(prompt, failureAnswer));
-            TrimHistory();
-            ApplyRunStatusAfterSave(SaveCurrentConversation(), presentation.DisplayText, ApplicationStatusState.Failed);
+            RetainInterruptedRun(presentation.DisplayText, ApplicationStatusState.Failed);
         }
         finally
         {
@@ -1113,7 +1119,7 @@ internal sealed class CollaborateCoordinator
     private async Task<CollaborateRunResult> RunFastAsync(
         ArenaViewSnapshot current,
         string prompt,
-        StackPanel traceItems,
+        Action<CollaborateStep> recordTrace,
         CancellationToken cancellationToken)
     {
         var final = await CompleteRoleAsync(
@@ -1122,14 +1128,14 @@ internal sealed class CollaborateCoordinator
             "Direct answer",
             PromptForFinal(current, prompt, []),
             cancellationToken);
-        AddTraceStep(traceItems, final);
+        recordTrace(final);
         return ResultFromFinal(final, []);
     }
 
     private async Task<CollaborateRunResult> RunTeamDraftAsync(
         ArenaViewSnapshot current,
         string prompt,
-        StackPanel traceItems,
+        Action<CollaborateStep> recordTrace,
         int rounds,
         CancellationToken cancellationToken)
     {
@@ -1155,7 +1161,7 @@ internal sealed class CollaborateCoordinator
                             "Improve the team's answer. Add high-signal corrections, stronger options, sharper tradeoffs, or clearer next steps. Avoid repeating points that are already good."),
                     cancellationToken);
                 steps.Add(step);
-                AddTraceStep(traceItems, step);
+                recordTrace(step);
             }
         }
 
@@ -1167,14 +1173,14 @@ internal sealed class CollaborateCoordinator
             "Synthesis",
             PromptForFinal(current, prompt, steps),
             cancellationToken);
-        AddTraceStep(traceItems, final);
+        recordTrace(final);
         return ResultFromFinal(final, steps);
     }
 
     private async Task<CollaborateRunResult> RunCritiqueAsync(
         ArenaViewSnapshot current,
         string prompt,
-        StackPanel traceItems,
+        Action<CollaborateStep> recordTrace,
         int rounds,
         CancellationToken cancellationToken)
     {
@@ -1192,7 +1198,7 @@ internal sealed class CollaborateCoordinator
                     PromptForDraft(current, prompt, "alpha"),
                     cancellationToken);
                 steps.Add(draft);
-                AddTraceStep(traceItems, draft);
+                recordTrace(draft);
 
                 UpdateRunProgress($"Beta round {round}/{rounds}...");
                 var critique = await CompleteRoleAsync(
@@ -1202,7 +1208,7 @@ internal sealed class CollaborateCoordinator
                     PromptForCritique(current, prompt, draft),
                     cancellationToken);
                 steps.Add(critique);
-                AddTraceStep(traceItems, critique);
+                recordTrace(critique);
 
                 UpdateRunProgress($"Gamma round {round}/{rounds}...");
                 var refinement = await CompleteRoleAsync(
@@ -1212,7 +1218,7 @@ internal sealed class CollaborateCoordinator
                     PromptForRefinement(current, prompt, draft, critique),
                     cancellationToken);
                 steps.Add(refinement);
-                AddTraceStep(traceItems, refinement);
+                recordTrace(refinement);
                 continue;
             }
 
@@ -1232,7 +1238,7 @@ internal sealed class CollaborateCoordinator
                     PromptForRoundPass(current, prompt, role.Item1, round, steps, role.Item3),
                     cancellationToken);
                 steps.Add(step);
-                AddTraceStep(traceItems, step);
+                recordTrace(step);
             }
         }
 
@@ -1244,14 +1250,14 @@ internal sealed class CollaborateCoordinator
             "Synthesis",
             PromptForFinal(current, prompt, steps),
             cancellationToken);
-        AddTraceStep(traceItems, final);
+        recordTrace(final);
         return ResultFromFinal(final, steps);
     }
 
     private async Task<CollaborateRunResult> RunRedTeamAsync(
         ArenaViewSnapshot current,
         string prompt,
-        StackPanel traceItems,
+        Action<CollaborateStep> recordTrace,
         int rounds,
         CancellationToken cancellationToken)
     {
@@ -1274,7 +1280,7 @@ internal sealed class CollaborateCoordinator
                     PromptForRedTeamPass(current, prompt, role.Item1, round, steps, role.Item3),
                     cancellationToken);
                 steps.Add(step);
-                AddTraceStep(traceItems, step);
+                recordTrace(step);
             }
         }
 
@@ -1286,7 +1292,7 @@ internal sealed class CollaborateCoordinator
             "Synthesis",
             PromptForFinal(current, prompt, steps),
             cancellationToken);
-        AddTraceStep(traceItems, final);
+        recordTrace(final);
         return ResultFromFinal(final, steps);
     }
 
@@ -4073,10 +4079,13 @@ internal sealed class CollaborateCoordinator
             () => historyStore.Save(conversations.Select(ToHistoryConversation).ToList()),
             AppErrorContext.Collaborate);
 
-    internal static CollaborateExchange InterruptedExchange(string prompt, string answer)
+    internal static CollaborateExchange InterruptedExchange(string prompt, string answer, IReadOnlyList<CollaborateStep>? trace = null)
     {
-        return new CollaborateExchange(prompt, answer, []);
+        return new CollaborateExchange(prompt, answer, trace?.ToArray() ?? []) { Interrupted = true };
     }
+
+    private static string ExchangeReviewOutcome(CollaborateExchange exchange, string outcome) =>
+        exchange.Interrupted ? "Interrupted collaboration." : outcome;
 
     internal static IReadOnlyList<string> NormalizeMemoryNotes(IEnumerable<string>? notes)
     {
@@ -4284,7 +4293,7 @@ internal sealed class CollaborateCoordinator
             builder.AppendLine();
             builder.AppendLine("### Run Review");
             builder.AppendLine();
-            builder.AppendLine(RunReviewText(BuildRunReview(exchange.Prompt, exchange.Answer, exchange.TraceSteps, "Exported.")));
+            builder.AppendLine(RunReviewText(BuildRunReview(exchange.Prompt, exchange.Answer, exchange.TraceSteps, ExchangeReviewOutcome(exchange, "Exported."))));
             builder.AppendLine();
 
             if (exchange.TraceSteps.Count > 0)
@@ -4495,7 +4504,7 @@ internal sealed class CollaborateCoordinator
         return new CollaborateExchange(
             exchange.Prompt,
             exchange.Answer,
-            exchange.TraceSteps.Select(FromHistoryStep).ToArray());
+            exchange.TraceSteps.Select(FromHistoryStep).ToArray()) { Interrupted = exchange.Interrupted };
     }
 
     private static CollaborateStep FromHistoryStep(CollaborateHistoryStep step)
@@ -4531,6 +4540,7 @@ internal sealed class CollaborateCoordinator
         {
             Prompt = exchange.Prompt,
             Answer = exchange.Answer,
+            Interrupted = exchange.Interrupted,
             TraceSteps = exchange.TraceSteps.Select(ToHistoryStep).ToList()
         };
     }
@@ -4578,7 +4588,7 @@ internal sealed class CollaborateCoordinator
                 AddTraceStep(traceItems, step, scrollToEnd: false);
             }
 
-            RenderRunReview(runReviewItems, exchange.Prompt, exchange.Answer, exchange.TraceSteps, "Restored.");
+            RenderRunReview(runReviewItems, exchange.Prompt, exchange.Answer, exchange.TraceSteps, ExchangeReviewOutcome(exchange, "Restored."));
         }
 
     }
@@ -4636,7 +4646,7 @@ internal sealed class CollaborateCoordinator
         }
 
         var runReviewItems = new StackPanel();
-        RenderRunReview(runReviewItems, exchange.Prompt, exchange.Answer, exchange.TraceSteps, "Restored.");
+        RenderRunReview(runReviewItems, exchange.Prompt, exchange.Answer, exchange.TraceSteps, ExchangeReviewOutcome(exchange, "Restored."));
         var reviewExpander = new Expander
         {
             Header = "Run Review",
@@ -4788,7 +4798,7 @@ internal sealed class CollaborateCoordinator
         {
             yield return ("Prompt", exchange.Prompt);
             yield return ("Answer", exchange.Answer);
-            yield return ("Run review", RunReviewText(BuildRunReview(exchange.Prompt, exchange.Answer, exchange.TraceSteps, "Restored.")));
+            yield return ("Run review", RunReviewText(BuildRunReview(exchange.Prompt, exchange.Answer, exchange.TraceSteps, ExchangeReviewOutcome(exchange, "Restored."))));
             foreach (var step in exchange.TraceSteps)
             {
                 yield return ("Role", step.RoleName);
@@ -5093,7 +5103,7 @@ internal sealed class CollaborateCoordinator
         }
 
         var metrics = ConversationMetrics(conversation);
-        if (metrics.IssueCount > 0)
+        if (metrics.IssueCount > 0 || conversation.Exchanges.Any(exchange => exchange.Interrupted))
         {
             return "Needs review";
         }
@@ -5312,7 +5322,7 @@ internal sealed class CollaborateCoordinator
         if (latestReview is not null)
         {
             builder.AppendLine("Latest run review:");
-            foreach (var line in RunReviewLines(BuildRunReview(latestReview.Prompt, latestReview.Answer, latestReview.TraceSteps, "Saved chat.")))
+            foreach (var line in RunReviewLines(BuildRunReview(latestReview.Prompt, latestReview.Answer, latestReview.TraceSteps, ExchangeReviewOutcome(latestReview, "Saved chat."))))
             {
                 builder.AppendLine($"- {line}");
             }
@@ -5682,7 +5692,10 @@ internal sealed class CollaborateCoordinator
 
     private sealed record CollaborateWelcomeAction(string Label, string Prompt);
 
-    internal sealed record CollaborateExchange(string Prompt, string Answer, IReadOnlyList<CollaborateStep> TraceSteps);
+    internal sealed record CollaborateExchange(string Prompt, string Answer, IReadOnlyList<CollaborateStep> TraceSteps)
+    {
+        public bool Interrupted { get; init; }
+    }
 
     internal sealed record CollaborateConversation(
         Guid Id,

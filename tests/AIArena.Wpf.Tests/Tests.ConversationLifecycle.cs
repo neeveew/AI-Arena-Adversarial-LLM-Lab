@@ -401,7 +401,9 @@ internal static partial class Program
     }
 
     private static CollaborateCoordinator CreateLifecycleCollaborate(IModelProviderClient client, TextBox prompt,
-        TextBlock status, Panel panel, ApplicationStatusCenter center, string mode)
+        TextBlock status, Panel panel, ApplicationStatusCenter center, string mode,
+        CollaborateHistoryStore? historyStore = null,
+        Func<string, Brush>? resourceBrush = null)
     {
         var modePicker = new ComboBox();
         modePicker.Items.Add(new ComboBoxItem { Content = mode, Tag = mode });
@@ -447,9 +449,9 @@ internal static partial class Program
             clearMemoryButton: new Button(),
             memoryItems: new StackPanel(),
             snapshot: () => SnapshotForOverviewTest(true, "fixture-model", "", 0, [], []),
-            resourceBrush: AccentResourceBrush,
+            resourceBrush: resourceBrush ?? AccentResourceBrush,
             setShellStatus: _ => { },
-            historyStore: new RecordingCollaborateHistoryStore(),
+            historyStore: historyStore ?? new RecordingCollaborateHistoryStore(),
             operationStatus: new WorkspaceOperationStatus(center, "collaborate", "Collaborate", "collaborate", () => ApplicationStatusIdentity.Empty));
     }
 }

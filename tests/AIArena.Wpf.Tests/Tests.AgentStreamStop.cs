@@ -72,7 +72,7 @@ internal static partial class Program
                     Require(restored.Any(message => message.RoleId == "builder" && message.Body.Contains(StopStreamPrefix, StringComparison.Ordinal)),
                         "Stopped public text did not survive conversation restoration.");
                     if (!beforeUi && !ignoresCancellation)
-                        CaptureAgentStopPreview(panel, resources, virtualized ? "stopped-virtualized.png" : "stopped-panel.png");
+                        CaptureWorkspaceConversationPreview(panel, resources, virtualized ? "stopped-virtualized.png" : "stopped-panel.png");
                 }
                 finally
                 {
@@ -85,9 +85,10 @@ internal static partial class Program
             }));
     }
 
-    private static void CaptureAgentStopPreview(Panel panel, FrameworkElement resources, string filename)
+    private static void CaptureWorkspaceConversationPreview(Panel panel, FrameworkElement resources, string filename)
     {
-        var directory = Environment.GetEnvironmentVariable("AIARENA_AGENT_STOP_PREVIEW_DIR");
+        var directory = Environment.GetEnvironmentVariable("AIARENA_CONVERSATION_PREVIEW_DIR")
+            ?? Environment.GetEnvironmentVariable("AIARENA_AGENT_STOP_PREVIEW_DIR");
         if (string.IsNullOrWhiteSpace(directory)) return;
         Directory.CreateDirectory(directory);
         var window = new Window
