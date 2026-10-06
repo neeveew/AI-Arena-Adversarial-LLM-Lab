@@ -148,6 +148,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private readonly AgentRunbookService runbook = new();
 
     private CancellationTokenSource? chatCancellation;
+    private ConversationPresentationCompletion? chatPresentation;
+    private bool chatConversationSaved;
     private LiveStreamCard? activeLiveStreamCard;
     private CancellationTokenSource? commandCancellation;
     private CancellationTokenSource? workspaceProfileCancellation;
@@ -1402,6 +1404,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         var internalRescuePromptAfterChat = "";
         var logicalSendSucceeded = false;
         var previousRescueCommandReplacement = allowRescueCommandReplacement;
+        var presentationCompletion = new ConversationPresentationCompletion(AppErrorContext.Agent);
+        chatPresentation = presentationCompletion;
+        chatConversationSaved = false;
         try
         {
             isRunningChat = true;
@@ -1436,7 +1441,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             var cancellationToken = chatCancellation.Token;
             SetChatControlsEnabled(false);
             RefreshCommandActionState();
-            RefreshProviderState();
+            TryChatPresentation(RefreshProviderState);
 
             if (messages.Count == 0)
             {
@@ -1591,7 +1596,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 && logicalSendSucceeded
                 && !autoRescueAfterChat)
             {
-                ClearComposerAfterSuccessfulSend(draftScopeAtSend, visibleComposerAtSend);
+                TryChatPresentation(() => ClearComposerAfterSuccessfulSend(draftScopeAtSend, visibleComposerAtSend));
             }
             if (chatStatusReceipt is { } receipt)
             {
@@ -1658,16 +1663,24 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         finally
         {
             allowRescueCommandReplacement = previousRescueCommandReplacement;
-            RunOnUiThread(() =>
-            {
-                announcedLiveResponseRoles.Clear();
-                isRunningChat = false;
-                SetChatControlsEnabled(true);
-                RefreshCommandActionState();
-            });
+            announcedLiveResponseRoles.Clear();
+            isRunningChat = false;
             chatCancellation?.Dispose();
             chatCancellation = null;
             chatStatusReceipt = null;
+            presentationCompletion.Try(() => RunOnUiThread(() => SetChatControlsEnabled(true)));
+            presentationCompletion.Try(() => RunOnUiThread(RefreshProviderState));
+            if (presentationCompletion.HasFailure)
+                presentationCompletion.Try(() => RunOnUiThread(RenderMessagePresentation));
+            presentationCompletion.Try(() => RunOnUiThread(ScrollToEnd));
+            if (presentationCompletion.HasFailure)
+            {
+                var warning = presentationCompletion.Warning(chatConversationSaved);
+                presentationCompletion.Try(() => RunOnUiThread(() =>
+                    statusText.Text = AppPostCommitEvidence.AppendWarning(statusText.Text, warning)));
+                presentationCompletion.Try(() => operationStatus?.PublishNotice(warning, ApplicationStatusState.Warning));
+            }
+            chatPresentation = null;
         }
 
         if (autoRescueAfterChat && !string.IsNullOrWhiteSpace(internalRescuePromptAfterChat))
@@ -1683,12 +1696,6 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         {
             await TryAutoRunPendingPreviewAsync("Full Access is active for this session.");
         }
-
-        RunOnUiThread(() =>
-        {
-            RefreshProviderState();
-            ScrollToEnd();
-        });
 
         return logicalSendSucceeded;
     }
@@ -2710,7 +2717,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return await modelClient.CompleteChatAsync(config, effectivePrompt, cancellationToken);
         }
 
-        var liveCard = BeginLiveStreamCard(roleId, roleName);
+        LiveStreamCard? liveCard = null;
+        TryChatPresentation(() => liveCard = BeginLiveStreamCard(roleId, roleName));
+        liveCard ??= new LiveStreamCard { Container = new Border(), Text = new TextBlock() };
         var output = liveCard.Output = new ModelPublicOutputCapture(
             new Progress<string>(_ => AppendLiveStreamText(liveCard, roleId, roleName)));
         activeLiveStreamCard = liveCard;
@@ -2734,7 +2743,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         finally
         {
             output.Seal();
-            RemoveLiveStreamCard(liveCard);
+            TryChatPresentation(() => RemoveLiveStreamCard(liveCard));
             if (ReferenceEquals(activeLiveStreamCard, liveCard)) activeLiveStreamCard = null;
         }
     }
@@ -2818,7 +2827,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         card.LastRender = now;
         const int maxLiveChars = 4000;
         var rendered = card.Output?.Tail(maxLiveChars) ?? "";
-        card.Text.Text = card.Output?.Characters > maxLiveChars ? "..." + rendered : rendered;
+        TryChatPresentation(() => card.Text.Text = card.Output?.Characters > maxLiveChars ? "..." + rendered : rendered);
         var approximateTokens = Math.Max(1, (card.Output?.Characters ?? 0) / 4);
         SetPhase(roleId, "Running", $"{roleName} is writing... ~{approximateTokens.ToString(CultureInfo.InvariantCulture)} tokens", persist: false);
         ScrollToEnd();
@@ -2890,8 +2899,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 : $"{step.Text}\n\nModel step failed: {step.Error}";
         var message = new AgentWorkspaceMessage(step.RoleId, step.RoleName, body, step.Ok ? "Agent" : "Error", step.Model, DateTimeOffset.Now);
         messages.Add(message);
-        AddMessagePresentation(message, announceAsNew: !announcedLiveResponseRoles.Remove(step.RoleId));
         PersistConversation();
+        AddMessagePresentation(message, announceAsNew: !announcedLiveResponseRoles.Remove(step.RoleId));
         SetPhase(step.RoleId, step.Ok ? "Done" : "Error", step.Ok ? $"{step.RoleName} completed." : step.Error);
         AddActivity(step.RoleName, step.Ok
             ? $"{step.Model} | {step.LatencyMs.ToString(CultureInfo.InvariantCulture)} ms | {step.TotalTokens.ToString(CultureInfo.InvariantCulture)} tok"
@@ -3432,37 +3441,43 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         messages.Clear();
-        ClearMessagePresentation();
         foreach (var message in restoredMessages)
         {
             messages.Add(message);
         }
 
-        if (virtualMessageItems is not null)
-        {
-            virtualMessageItems.ReplaceRows(MessageRowDefinitions(messages), refreshRealizedRows: false);
-        }
-        else
-        {
-            foreach (var message in messages)
-            {
-                messageItems.Children.Add(CreateMessageCard(message));
-            }
-        }
-
+        RenderMessagePresentation();
         AddActivity("Restored", AgentWorkspaceConversationStore.RestoreActivityDetail(messages.Count));
         UpdateStatus("Agent chat restored.");
         JumpToLatest();
         return true;
     }
 
+    private void RenderMessagePresentation()
+    {
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.ReplaceRows(MessageRowDefinitions(messages), refreshRealizedRows: true);
+        }
+        else
+        {
+            ClearMessagePresentation();
+            foreach (var message in messages)
+            {
+                messageItems.Children.Add(CreateMessageCard(message));
+            }
+        }
+    }
+
     private void PersistConversation()
     {
+        if (chatPresentation is not null) chatConversationSaved = false;
         var currentSettings = settings();
         currentSettings.AgentWorkspaceSessionWorkspacePath = workspacePath;
         currentSettings.AgentWorkspaceMessages = AgentWorkspaceConversationStore.PersistedMessages(messages);
         currentSettings.AgentRunbook = runbook.State;
         persistSettings(currentSettings);
+        if (chatPresentation is not null) chatConversationSaved = true;
     }
 
     private void PersistRunbook()
@@ -3551,6 +3566,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     }
 
     private void AddMessagePresentation(AgentWorkspaceMessage message, bool announceAsNew = true)
+        => TryChatPresentation(() => AddMessagePresentationCore(message, announceAsNew));
+
+    private void AddMessagePresentationCore(AgentWorkspaceMessage message, bool announceAsNew)
     {
         if (virtualMessageItems is not null)
         {
@@ -3617,7 +3635,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             }
         }
 
-        phaseSummaryText.Text = summary;
+        TryChatPresentation(() => phaseSummaryText.Text = summary);
         PersistRunbook();
         RenderPhases();
     }
@@ -3641,7 +3659,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private void SetPhase(string roleId, string state, string summary, bool persist = true)
     {
         phaseStates[roleId] = state;
-        phaseSummaryText.Text = summary;
+        TryChatPresentation(() => phaseSummaryText.Text = summary);
         if (runbook.HasActiveRun)
         {
             runbook.UpdateStep(AgentRunbookService.PhaseStepId(roleId), state, summary, DateTimeOffset.Now);
@@ -3655,6 +3673,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     }
 
     private void RenderPhases()
+        => TryChatPresentation(RenderPhasesCore);
+
+    private void RenderPhasesCore()
     {
         phaseItems.Children.Clear();
         runbookMetaText.Text = runbook.HasActiveRun
@@ -3684,6 +3705,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     }
 
     private void RefreshBuildEvidence()
+        => TryChatPresentation(RefreshBuildEvidenceCore);
+
+    private void RefreshBuildEvidenceCore()
     {
         buildEvidenceSummaryText.Text = buildEvidenceSummary;
         buildEvidenceSummaryText.ToolTip = buildEvidenceSummary;
@@ -4217,6 +4241,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     }
 
     private void AddActivity(string title, string detail)
+        => TryChatPresentation(() => AddActivityCore(title, detail));
+
+    private void AddActivityCore(string title, string detail)
     {
         var item = new Border
         {
@@ -4561,10 +4588,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void UpdateStatus(string status)
     {
-        statusText.Text = status;
+        TryChatPresentation(() => statusText.Text = status);
         if (operationStatus is null)
         {
-            setShellStatus(status);
+            TryChatPresentation(() => setShellStatus(status));
         }
         else
         {
@@ -4574,23 +4601,23 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void UpdateChatProgress(string status)
     {
-        statusText.Text = status;
+        TryChatPresentation(() => statusText.Text = status);
         if (chatStatusReceipt is { } receipt)
         {
             operationStatus?.Update(receipt, status);
         }
         else
         {
-            setShellStatus(status);
+            TryChatPresentation(() => setShellStatus(status));
         }
     }
 
     private void SetChatOutcome(string summary, ApplicationStatusState state)
     {
-        statusText.Text = summary;
+        TryChatPresentation(() => statusText.Text = summary);
         if (chatStatusReceipt is not { } receipt)
         {
-            setShellStatus(summary);
+            TryChatPresentation(() => setShellStatus(summary));
         }
         else if (state == ApplicationStatusState.Cancelled)
         {
@@ -5367,6 +5394,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     }
 
     private void RefreshWorkSummary()
+        => TryChatPresentation(RefreshWorkSummaryCore);
+
+    private void RefreshWorkSummaryCore()
     {
         if (lastCommandResult is null || lastFileReceipt is null)
         {
@@ -5909,26 +5939,27 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void SetChatControlsEnabled(bool enabled)
     {
-        promptText.IsEnabled = enabled;
-        planPromptButton.IsEnabled = enabled;
-        breakdownPromptButton.IsEnabled = enabled;
-        progressPromptButton.IsEnabled = enabled;
-        commandPromptButton.IsEnabled = enabled;
-        buildAppPromptButton.IsEnabled = enabled;
-        nextStepPromptButton.IsEnabled = enabled;
-        verifyPromptButton.IsEnabled = enabled;
-        rescueCommandButton.IsEnabled = enabled;
-        sendButton.IsEnabled = enabled;
-        clearButton.IsEnabled = enabled;
-        stopButton.IsEnabled = !enabled;
-        approveAllButton.IsEnabled = !isRunningCommand;
-        autoContinueButton.IsEnabled = !isRunningCommand;
-        workspaceBrowseButton.IsEnabled = enabled && !isRunningCommand;
-        workspaceApplyButton.IsEnabled = enabled && !isRunningCommand;
-        RefreshCommandActionState();
-        RefreshAutoApproveAction();
-        RefreshAutoContinueAction();
+        foreach (var control in new Control[]
+        {
+            promptText, planPromptButton, breakdownPromptButton, progressPromptButton,
+            commandPromptButton, buildAppPromptButton, nextStepPromptButton, verifyPromptButton,
+            rescueCommandButton, sendButton, clearButton
+        }) TryChatPresentation(() => control.IsEnabled = enabled);
+        TryChatPresentation(() => stopButton.IsEnabled = !enabled);
+        TryChatPresentation(() => approveAllButton.IsEnabled = !isRunningCommand);
+        TryChatPresentation(() => autoContinueButton.IsEnabled = !isRunningCommand);
+        TryChatPresentation(() => workspaceBrowseButton.IsEnabled = enabled && !isRunningCommand);
+        TryChatPresentation(() => workspaceApplyButton.IsEnabled = enabled && !isRunningCommand);
+        TryChatPresentation(RefreshCommandActionState);
+        TryChatPresentation(RefreshAutoApproveAction);
+        TryChatPresentation(RefreshAutoContinueAction);
         RefreshWorkSummary();
+    }
+
+    private void TryChatPresentation(Action action)
+    {
+        if (chatPresentation is null) action();
+        else chatPresentation.Try(action);
     }
 
     private void SetCommandControlsEnabled(bool enabled)

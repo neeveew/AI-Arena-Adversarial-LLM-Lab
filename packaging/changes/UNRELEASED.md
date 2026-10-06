@@ -10,6 +10,7 @@ Changes after `0.4.145-beta`:
 - Deliver status snapshots in revision order through nested and concurrent publication. Bound notification bursts, retain the latest complete state, and reject stale queued updates or events from an old status-card binding.
 - Recover top-bar and status-card projections after one-time property or collection callback failures. Mark revisions applied only after rendering completes, and contain queued dispatcher failures without an unbounded retry loop.
 - Keep the Models catalog reachable beside an expanded loaded-model editor in short windows. Compact the empty state, reuse the header's Connection and Refresh actions, distinguish discovery from a completed empty result, and keep Clear filters visible without hiding loaded models.
+- Save completed Agent replies before rendering them. Reuse the shared presentation completion guard for conversation, phase, activity, and summary views; restore composer controls independently and retain accepted streams when live-card rendering fails. Provider and primary-save failures still report failure and retain the draft.
 
 Verification evidence for this development increment is under
 `artifacts/bugfix-2026-10-06-collaborate-postsave/`. It remains outside the frozen
@@ -29,3 +30,6 @@ Partial projection recovery verification is under
 
 Compact Models empty-state verification is under
 `artifacts/bugfix-2026-10-06-models-empty-state/`.
+
+Agent reply/presentation boundary verification is under
+`artifacts/bugfix-2026-10-06-agent-presentation/`.
