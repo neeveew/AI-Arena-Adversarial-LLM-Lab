@@ -689,6 +689,8 @@ var tests = new List<(string Name, Action Test)>
     ("match setup control handler validates roster changes", MatchSetupControlHandlerValidatesRosterChanges),
     ("match setup model behavior control shares the visual mutation path", MatchSetupModelBehaviorControlSharesVisualMutationPath),
     ("match setup snapshot projection stays lazy and current", MatchSetupSnapshotProjectionStaysLazyAndCurrent),
+    ("section navigation reveals editor and preserves later reader scroll", SectionNavigationRevealsEditorAndPreservesLaterReaderScroll),
+    ("section navigation owns latest focus and rejects obsolete requests", SectionNavigationOwnsLatestFocusAndRejectsObsoleteRequests),
     ("match setup projection identity scopes relevant changes", MatchSetupProjectionIdentityScopesRelevantChanges),
     ("match setup rivalry refresh preserves local drafts", MatchSetupRivalryRefreshPreservesLocalDrafts),
     ("match setup package codec round trips exact portable state", MatchSetupPackageCodecRoundTripsExactPortableState),

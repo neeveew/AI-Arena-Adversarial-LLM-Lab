@@ -190,9 +190,10 @@ internal sealed class MatchLockCoordinator
         actions.Children.Add(editButton);
         actions.Children.Add(lockBox);
         DockPanel.SetDock(actions, Dock.Right);
-        header.Children.Add(actions);
 
-        var titlePanel = new StackPanel { Orientation = Orientation.Horizontal };
+        Panel titlePanel = isCastCard
+            ? new WrapPanel { Orientation = Orientation.Horizontal }
+            : new StackPanel { Orientation = Orientation.Horizontal };
         titlePanel.Children.Add(new TextBlock
         {
             Text = title,
@@ -200,9 +201,11 @@ internal sealed class MatchLockCoordinator
             FontSize = 14,
             FontWeight = FontWeights.SemiBold,
             TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = title,
             VerticalAlignment = VerticalAlignment.Center
         });
-        titlePanel.Children.Add(CreateLockMetaChip(DisplayLockKey(lockKey), accent));
+        if (!isCastCard || !title.Trim().Equals(DisplayLockKey(lockKey), StringComparison.OrdinalIgnoreCase))
+            titlePanel.Children.Add(CreateLockMetaChip(DisplayLockKey(lockKey), accent));
         var visibleVoiceStyle = RoleStyleCatalog.VoiceStyleChipText(voiceStyle);
         if (isCastCard && !string.IsNullOrWhiteSpace(visibleVoiceStyle))
         {
@@ -217,7 +220,18 @@ internal sealed class MatchLockCoordinator
         {
             titlePanel.Children.Add(CreateLockMetaChip("Locked", lockAccent));
         }
-        header.Children.Add(titlePanel);
+        if (isCastCard)
+        {
+            DockPanel.SetDock(titlePanel, Dock.Top);
+            actions.Margin = new Thickness(0, 6, 0, 0);
+            header.Children.Add(titlePanel);
+            header.Children.Add(actions);
+        }
+        else
+        {
+            header.Children.Add(actions);
+            header.Children.Add(titlePanel);
+        }
 
         var displayBody = isCastCard ? CompactCastPreviewBody(body) : body;
         var text = new TextBlock

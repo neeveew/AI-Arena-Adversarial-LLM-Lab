@@ -168,6 +168,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private ShellSurface _activeShellSurface = ShellSurface.Lab;
     private ShellSurface _matchSetupReturnSurface = ShellSurface.Lab;
     private string _matchSetupSection = "scenario";
+    private SectionViewportNavigation? _matchSetupSectionNavigation;
     private readonly Dictionary<Expander, bool> _settingsExpansionBeforeSearch = [];
     private bool _settingsSearchActive;
     private readonly Dictionary<string, string> _sessionSettingsBaseline = new(StringComparer.Ordinal);
@@ -3111,6 +3112,15 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
 
         _matchSetupSection = normalized;
+        if (CustomMatchPanel.IsVisible)
+        {
+            _matchSetupSectionNavigation ??= new SectionViewportNavigation(MatchSetupScrollViewer,
+                () => CustomMatchPanel.IsVisible && _activeShellSurface == ShellSurface.MatchSetup && !_shutdownReady);
+            var section = (FrameworkElement)sections.Single(item => item.Tag == normalized).Section;
+            _matchSetupSectionNavigation.Reveal(
+                normalized == "saved" ? MatchSetupSavedEditorFields : section,
+                normalized == "saved" ? SavedStateModePicker : section);
+        }
         return true;
     }
 
@@ -3936,7 +3946,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                     }
                 }
                 SavedStateCoordinator.RefreshCheckpoints();
-                LoadStatus.Text = $"Loaded session: {snapshot.SnapshotPath}\nExternal-change refresh: 1.2s";
+                LoadStatus.Text = $"Loaded session: {currentSession.Id}.";
                 ShellTopBar.Presentation.StatusCenter.Resolve("app.session-load");
             })) return false;
         }
@@ -6288,6 +6298,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         var opening = CustomMatchPanel.Visibility != Visibility.Visible;
         if (opening)
         {
+            _matchSetupSectionNavigation?.Cancel();
             _matchSetupReturnSurface = _activeShellSurface switch
             {
                 ShellSurface.MatchSetup => ShellSurface.Lab,

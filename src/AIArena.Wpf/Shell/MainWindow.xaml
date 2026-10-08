@@ -1511,7 +1511,7 @@
                                 VerticalAlignment="Center"
                                 ToolTip="Close Match Setup" />
                     </Grid>
-                    <ScrollViewer Grid.Row="1"
+                    <ScrollViewer x:Name="MatchSetupScrollViewer" Grid.Row="1"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
@@ -2326,7 +2326,7 @@
                                                 ToolTip="Create and switch to an independent branch of the current run" />
                                     </Grid>
                                 </Border>
-                                <Grid Grid.Row="4">
+                                <Grid x:Name="MatchSetupSavedEditorFields" Grid.Row="4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="170" />
                                         <ColumnDefinition Width="10" />
@@ -2377,6 +2377,7 @@
                                             Content="Save"
                                             Click="SavedStateSaveButton_Click"
                                             Style="{StaticResource PrimaryButton}"
+                                            VerticalAlignment="Top"
                                             MinWidth="100"
                                             Margin="{DynamicResource Arena.Gap.Inline.After.Default}" />
                                     <Button x:Name="SavedStateLoadButton"
@@ -2384,6 +2385,7 @@
                                             Content="Load"
                                             Click="SavedStateLoadButton_Click"
                                             Style="{StaticResource SecondaryButton}"
+                                            VerticalAlignment="Top"
                                             MinWidth="100"
                                             Margin="{DynamicResource Arena.Gap.Inline.After.Default}" />
                                     <Button x:Name="SavedStateDeleteButton"
@@ -2391,6 +2393,7 @@
                                             Content="Delete"
                                             Click="SavedStateDeleteButton_Click"
                                             Style="{StaticResource DangerButton}"
+                                            VerticalAlignment="Top"
                                             MinWidth="100"
                                             Margin="0,0,12,0" />
                                     <Border Grid.Column="3"
