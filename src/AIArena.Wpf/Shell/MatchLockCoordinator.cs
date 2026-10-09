@@ -658,13 +658,11 @@ internal sealed class MatchLockCoordinator
                 return;
             }
 
-            await saveSnapshotWithFeedbackAsync(latest, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_match_voice_style_changed", new
+            await SaveMatchChangeAndReportAsync(latest, session.Id, "native_match_voice_style_changed", new
             {
                 key = NormalizeLockKey(key),
                 voice_style = voiceStyle
-            });
-            await refreshActiveSessionAsync($"Updated {DisplayLockKey(key)} voice: {RoleStyleCatalog.VoiceStyleLabel(voiceStyle)}.");
+            }, $"Updated {DisplayLockKey(key)} voice: {RoleStyleCatalog.VoiceStyleLabel(voiceStyle)}.");
         }, false);
     }
 
@@ -698,16 +696,14 @@ internal sealed class MatchLockCoordinator
                 return;
             }
 
-            await saveSnapshotWithFeedbackAsync(latest, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_agent_accent_color_changed", new
-            {
-                key = NormalizeLockKey(key),
-                accent_color = normalized
-            });
             var status = string.IsNullOrWhiteSpace(normalized)
                 ? $"Reset {DisplayLockKey(key)} color."
                 : $"Updated {DisplayLockKey(key)} color: {normalized}.";
-            await refreshActiveSessionAsync(status);
+            await SaveMatchChangeAndReportAsync(latest, session.Id, "native_agent_accent_color_changed", new
+            {
+                key = NormalizeLockKey(key),
+                accent_color = normalized
+            }, status);
         }, false);
     }
 
@@ -735,13 +731,11 @@ internal sealed class MatchLockCoordinator
                 return;
             }
 
-            await saveSnapshotWithFeedbackAsync(latest, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_agent_pressure_changed", new
+            await SaveMatchChangeAndReportAsync(latest, session.Id, "native_agent_pressure_changed", new
             {
                 key = NormalizeLockKey(key),
                 pressure_profile = pressure
-            });
-            await refreshActiveSessionAsync($"Updated {DisplayLockKey(key)} pressure: {RoleStyleCatalog.AgentPressureLabel(pressure)}.");
+            }, $"Updated {DisplayLockKey(key)} pressure: {RoleStyleCatalog.AgentPressureLabel(pressure)}.");
         }, false);
     }
 
@@ -756,8 +750,13 @@ internal sealed class MatchLockCoordinator
         var locked = checkBox.IsChecked == true;
         await runArenaBusyAsync($"Updating {key} lock...", null, async () =>
         {
-            await matchGeneration.ToggleLockAsync(session.Id, key, locked);
-            await refreshActiveSessionAsync($"{key} lock {(locked ? "enabled" : "disabled")}.");
+            var change = await matchGeneration.ToggleLockWithEvidenceAsync(session.Id, key, locked);
+            if (!change.Changed)
+            {
+                if (SessionIsCurrent(session.Id)) setLoadStatus($"No snapshot found for session {session.Id}.");
+                return;
+            }
+            await CompleteSavedMatchChangeAsync(session.Id, $"{key} lock {(locked ? "enabled" : "disabled")}.", change.Warning);
         }, false);
     }
 
@@ -790,6 +789,11 @@ internal sealed class MatchLockCoordinator
             return;
         }
 
+        await UpdateMatchTextAsync(session, key, edited);
+    }
+
+    private async Task UpdateMatchTextAsync(CoreSessionSummary session, string key, string edited)
+    {
         await runArenaBusyAsync($"Updating {key}...", null, async () =>
         {
             var latest = await sessionStore.LoadSnapshotAsync(session.Id);
@@ -806,15 +810,47 @@ internal sealed class MatchLockCoordinator
             }
 
             latest.MatchLocks[NormalizeLockKey(key)] = true;
-            await saveSnapshotWithFeedbackAsync(latest, session.Id);
             var normalizedKey = NormalizeLockKey(key);
-            await eventLogStore.AppendAsync(session.Id, "native_match_text_edited", new
+            await SaveMatchChangeAndReportAsync(latest, session.Id, "native_match_text_edited", new
             {
                 key = normalizedKey,
                 locked = true
-            });
-            await refreshActiveSessionAsync($"Updated and locked {DisplayLockKey(key)}.");
+            }, $"Updated and locked {DisplayLockKey(key)}.");
         }, false);
+    }
+
+    private bool SessionIsCurrent(string sessionId) =>
+        string.Equals(activeSession()?.Id, sessionId, StringComparison.OrdinalIgnoreCase);
+
+    private async Task SaveMatchChangeAndReportAsync(AIArena.Core.Models.ArenaSnapshot snapshot,
+        string sessionId, string eventType, object payload, string outcome)
+    {
+        await saveSnapshotWithFeedbackAsync(snapshot, sessionId);
+        var evidence = await AppPostCommitEvidence.TryAppendAsync(
+            eventLogStore, sessionId, eventType, payload, AppErrorContext.Settings);
+        await CompleteSavedMatchChangeAsync(sessionId, outcome, evidence.Warning);
+    }
+
+    private async Task CompleteSavedMatchChangeAsync(string sessionId, string outcome, string evidenceWarning)
+    {
+        if (!SessionIsCurrent(sessionId)) return;
+        var completion = await AppPostCommitEvidence.RefreshAsync(
+            AppPostCommitEvidence.AppendWarning(outcome, evidenceWarning), committed: true,
+            status => SessionIsCurrent(sessionId) ? refreshActiveSessionAsync(status) : Task.CompletedTask,
+            AppErrorContext.Settings);
+        if (completion.Complete || !SessionIsCurrent(sessionId)) return;
+
+        // Each status view is independent; neither may replace the durable setting outcome.
+        await AppPostCommitEvidence.TryCompleteAsync(() =>
+        {
+            if (SessionIsCurrent(sessionId)) setLoadStatus(completion.Status);
+            return Task.CompletedTask;
+        }, "the saved-setting status could not be displayed", AppErrorContext.Settings);
+        await AppPostCommitEvidence.TryCompleteAsync(() =>
+        {
+            if (SessionIsCurrent(sessionId)) setArenaRunStatus(completion.Status);
+            return Task.CompletedTask;
+        }, "the saved-setting status could not be displayed", AppErrorContext.Settings);
     }
 
     private void RoleDetailsButton_Click(object sender, RoutedEventArgs e)

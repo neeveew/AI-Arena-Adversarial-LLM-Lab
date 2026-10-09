@@ -84,6 +84,26 @@ internal sealed record AppPostCommitEvidenceResult(
 /// </summary>
 internal static class AppPostCommitEvidence
 {
+    /// <summary>Only the authoritative write may fail the save; progress and result views are secondary.</summary>
+    internal static async Task<string> SaveWithFeedbackAsync(
+        Func<Task> save, Action saving, Action saved, Action<Exception> failed, AppErrorContext context)
+    {
+        var progressError = await PostCommitEvidence.TryCompleteAsync(() => { saving(); return Task.CompletedTask; });
+        try
+        {
+            await save();
+        }
+        catch (Exception exception)
+        {
+            await PostCommitEvidence.TryCompleteAsync(() => { failed(exception); return Task.CompletedTask; });
+            throw;
+        }
+        var savedError = await PostCommitEvidence.TryCompleteAsync(() => { saved(); return Task.CompletedTask; });
+        var feedbackError = progressError ?? savedError;
+        return feedbackError is null ? "" : CompletionWarning(
+            feedbackError, "save feedback could not be fully updated", context, saved: true);
+    }
+
     internal static async Task<AppPostCommitEvidenceResult> TryAppendAsync(
         EventLogStore eventLogStore,
         string sessionId,

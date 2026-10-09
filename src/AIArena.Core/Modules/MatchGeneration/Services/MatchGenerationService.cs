@@ -401,17 +401,24 @@ public sealed class MatchGenerationService : IDisposable
         return MatchGenerationResult.Completed(newSessionId, entry.ScenarioSeed, generated.Style, entry.Intensity);
     }
 
-    public async Task ToggleLockAsync(string sessionId, string key, bool locked, CancellationToken cancellationToken = default)
+    public Task ToggleLockAsync(string sessionId, string key, bool locked, CancellationToken cancellationToken = default) =>
+        ToggleLockWithEvidenceAsync(sessionId, key, locked, cancellationToken);
+
+    public async Task<MatchLockChangeResult> ToggleLockWithEvidenceAsync(
+        string sessionId, string key, bool locked, CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
         {
-            return;
+            return new MatchLockChangeResult(false, false);
         }
 
-        snapshot.MatchLocks[NormalizeLockKey(key)] = locked;
+        var normalizedKey = NormalizeLockKey(key);
+        snapshot.MatchLocks[normalizedKey] = locked;
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-        await _eventLogStore.AppendAsync(sessionId, "native_match_lock_changed", new { key, locked }, cancellationToken);
+        var evidenceError = await PostCommitEvidence.TryAppendAsync(
+            _eventLogStore, sessionId, "native_match_lock_changed", new { key = normalizedKey, locked });
+        return new MatchLockChangeResult(true, evidenceError is null);
     }
 
     private static void ApplyGeneratedMatch(ArenaSnapshot snapshot, GeneratedMatch generated, bool clearTranscript)
@@ -1032,6 +1039,11 @@ public sealed record MatchGenerationResult(bool Ok, string Label, string Seed, s
 {
     public static MatchGenerationResult Completed(string label, string seed, string style, string intensity = "") => new(true, label, seed, style, intensity, "");
     public static MatchGenerationResult Failed(string error) => new(false, "", "", "", "", error);
+}
+
+public sealed record MatchLockChangeResult(bool Changed, bool EventRecorded)
+{
+    public string Warning => Changed && !EventRecorded ? PostCommitEvidence.ActivityLogWarning : "";
 }
 
 internal sealed record GeneratedMatch(string Label, string Style, string Topic, string Global, string NarratorBrief, IReadOnlyList<GeneratedPersona> Personas)

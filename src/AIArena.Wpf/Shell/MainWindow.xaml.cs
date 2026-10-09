@@ -5745,19 +5745,32 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         string sessionId,
         CancellationToken cancellationToken = default)
     {
-        SetSaveStatus("Saving...", ResourceBrush("MutedTextBrush"));
-        try
+        bool Current() => string.Equals(_activeSession?.Id, sessionId, StringComparison.OrdinalIgnoreCase);
+        var warning = await AppPostCommitEvidence.SaveWithFeedbackAsync(
+            () => _coreSessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken),
+            () => { if (Current()) SetSaveStatus("Saving...", ResourceBrush("MutedTextBrush")); },
+            () => { if (Current()) SetSaveStatus($"Saved {DateTime.Now:h:mm tt}", ResourceBrush("Arena.Brush.Success")); },
+            exception =>
+            {
+                if (Current()) SetSaveStatus(AppErrorPresenter.Present(exception, AppErrorContext.SavedState).DisplayText,
+                    ResourceBrush("DangerTextBrush"));
+            }, AppErrorContext.SavedState);
+        if (!Current()) return;
+        if (!string.IsNullOrWhiteSpace(warning))
+            await PostCommitEvidence.TryCompleteAsync(() =>
+            {
+                if (Current()) SaveStatusText.Text = "Saved; feedback unavailable.";
+                return Task.CompletedTask;
+            });
+        await PostCommitEvidence.TryCompleteAsync(() =>
         {
-            await _coreSessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-            SetSaveStatus($"Saved {DateTime.Now:h:mm tt}", ResourceBrush("Arena.Brush.Success"));
-        }
-        catch (Exception ex)
-        {
-            SetSaveStatus(
-                AppErrorPresenter.Present(ex, AppErrorContext.SavedState).DisplayText,
-                ResourceBrush("DangerTextBrush"));
-            throw;
-        }
+            if (!Current()) return Task.CompletedTask;
+            if (string.IsNullOrWhiteSpace(warning)) ShellTopBar.Presentation.StatusCenter.Resolve("app.save-feedback");
+            else ShellTopBar.Presentation.StatusCenter.PublishNotice("app.save-feedback", "App", ApplicationStatusState.Warning,
+                warning, "The snapshot was saved. Its progress or completion feedback could not be fully updated.",
+                "arena", new ApplicationStatusIdentity(sessionId), lifetime: ApplicationStatusLifetime.UntilResolved);
+            return Task.CompletedTask;
+        });
     }
 
     private void SetSaveStatus(string text, Brush brush)

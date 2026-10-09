@@ -311,6 +311,8 @@ var tests = new List<(string Name, Action Test)>
     ("event log batches serialize with legacy writers across processes", EventLogBatchingOptimizationTests.BatchAndLegacyWriterSerializeAcrossProcesses),
     ("scenario audit repairs incomplete contracts and classifies replay", ScenarioAuditRepairsIncompleteContractsAndClassifiesReplay),
     ("generates random seed match respecting locks", GenerateRandomSeedMatchRespectingLocks),
+    ("match lock completion survives optional evidence failure", MatchLockCompletionTests.SurvivesOptionalEvidenceFailure),
+    ("match lock completion receipts and cancellation stay truthful", MatchLockCompletionTests.ReceiptsAndCancellationStayTruthful),
     ("replays automatic random style from seed", ReplayAutomaticRandomStyleFromSeed),
     ("generates requested random seed style and intensity", GenerateRequestedRandomSeedStyleAndIntensity),
     ("generates one-line pressure random seed", GenerateOneLinePressureRandomSeed),

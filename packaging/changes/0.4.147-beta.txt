@@ -1,0 +1,10 @@
+AI Arena - Lite 0.4.147-beta
+
+Changes since 0.4.146-beta:
+
+- Update bundled Werkzeug to 3.1.9, fixing Windows device-path validation (GHSA-g6x2-hccm-hh4m). Verify the patched bundled runtime and gateway boundary while retaining pristine SearXNG source and dependency licences.
+- Prevent background checkpoint refreshes from replacing newer Sessions or Templates feedback, and discard pending results after checkpoint state is cleared. Preserve the selected checkpoint and typed name when loading succeeds.
+- Bring the selected Match Setup editor into view after layout, retain the latest section and keyboard focus through rapid navigation, and preserve subsequent reader scrolling. Open Saved State at its editor fields with compact action buttons and a concise loaded-session message.
+- Keep Cast role names readable with a wrapping title row above actions, full-title tooltips, and fewer redundant identity chips.
+- Keep saved voice, pressure, color, lock, and scenario edits successful when optional activity logging or view refresh fails. Show privacy-safe warnings, preserve real save failures, and prevent delayed feedback from affecting a newly selected session.
+- Consolidate saved-setting completion and protect snapshot writes from failures in progress, success, or failure feedback. Missing snapshots and canceled writes never claim a successful change.
