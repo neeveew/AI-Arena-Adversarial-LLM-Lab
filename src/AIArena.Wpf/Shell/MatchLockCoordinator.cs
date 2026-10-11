@@ -96,7 +96,7 @@ internal sealed class MatchLockCoordinator
 
     public void UpdateBusyState(bool busy)
     {
-        if (busy) CloseAccentColorPopup();
+        if (busy && activeColorPopup is not { Saving: true }) CloseAccentColorPopup();
         foreach (var checkBox in lockControls)
         {
             checkBox.IsEnabled = !busy;
@@ -470,9 +470,6 @@ internal sealed class MatchLockCoordinator
             StaysOpen = false,
             AllowsTransparency = true
         };
-        var context = new AccentColorPopupContext(session, payload.Key, button, popup);
-        Task ApplyChoice(string value) => ApplyAccentColorChoiceAsync(context, value);
-
         var root = new Border
         {
             Background = resourceBrush("PanelBrush"),
@@ -530,10 +527,6 @@ internal sealed class MatchLockCoordinator
         {
             Margin = new Thickness(0, 0, 0, 8)
         };
-        foreach (var option in AgentAccentService.PresetOptions)
-        {
-            swatches.Children.Add(CreateColorPresetButton(payload.Key, option, ApplyChoice));
-        }
         stack.Children.Add(swatches);
 
         var hexRow = new DockPanel
@@ -562,6 +555,27 @@ internal sealed class MatchLockCoordinator
         DockPanel.SetDock(hexText, Dock.Right);
         hexRow.Children.Add(hexText);
         stack.Children.Add(hexRow);
+        var feedback = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 0, 8),
+            Visibility = Visibility.Collapsed
+        };
+        AutomationProperties.SetName(hexText, $"{DisplayLockKey(payload.Key)} color hex");
+        AutomationProperties.SetHelpText(hexText, "Enter #RRGGBB, or leave blank for the role color.");
+        AutomationProperties.SetName(feedback, "Color change status");
+        AutomationProperties.SetLiveSetting(feedback, AutomationLiveSetting.Polite);
+        stack.Children.Add(feedback);
+        var context = new AccentColorPopupContext(session, payload.Key, button, popup, hexText, feedback);
+        Task ApplyChoice(string value) => ApplyAccentColorChoiceAsync(context, value);
+        foreach (var option in AgentAccentService.PresetOptions)
+        {
+            var preset = CreateColorPresetButton(payload.Key, option, ApplyChoice);
+            context.Choices.Add(preset);
+            swatches.Children.Add(preset);
+        }
+        hexText.TextChanged += (_, _) => { if (!context.Saving) SetAccentColorFeedback(context, ""); };
 
         var actions = new DockPanel { LastChildFill = false };
         var reset = new Button
@@ -603,6 +617,8 @@ internal sealed class MatchLockCoordinator
         DockPanel.SetDock(apply, Dock.Right);
         actions.Children.Add(apply);
         stack.Children.Add(actions);
+        context.Choices.Add(reset);
+        context.Choices.Add(apply);
 
         popup.Child = root;
         RoutedEventHandler anchorUnloaded = (_, _) => CloseAccentColorPopup(popup);
@@ -629,12 +645,67 @@ internal sealed class MatchLockCoordinator
 
     private async Task ApplyAccentColorChoiceAsync(AccentColorPopupContext context, string value)
     {
-        var current = ReferenceEquals(activeColorPopup, context) && context.Popup.IsOpen
-            && SessionIsCurrent(context.Session.Id) && colorControls.Contains(context.Anchor)
-            && context.Anchor.IsLoaded && !isArenaBusy();
-        CloseAccentColorPopup(context.Popup);
-        if (!current) return;
-        await UpdateAccentColorAsync(context.Session, context.Key, value);
+        if (context.Saving) return;
+        if (!AccentColorPopupIsCurrent(context) || isArenaBusy())
+        {
+            CloseAccentColorPopup(context.Popup);
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(value) && AgentAccentService.NormalizeColor(value).Length == 0)
+        {
+            SetAccentColorFeedback(context, "Enter a valid #RRGGBB hex color.", error: true);
+            context.HexInput.Focus();
+            return;
+        }
+
+        context.Saving = true;
+        try
+        {
+            await PostCommitEvidence.TryCompleteAsync(() =>
+            {
+                context.HexInput.Text = value;
+                context.Popup.StaysOpen = true;
+                SetAccentColorFeedback(context, "Saving color...");
+                SetAccentColorWorking(context, true);
+                return Task.CompletedTask;
+            });
+            var result = await UpdateAccentColorAsync(context.Session, context.Key, value);
+            if (result.Saved) CloseAccentColorPopup(context.Popup);
+            else if (AccentColorPopupIsCurrent(context)) SetAccentColorFeedback(context, result.Message, error: true);
+        }
+        finally
+        {
+            context.Saving = false;
+            if (AccentColorPopupIsCurrent(context) && !isArenaBusy())
+            {
+                SetAccentColorWorking(context, false);
+                context.Popup.StaysOpen = false;
+                context.HexInput.Focus();
+            }
+            else CloseAccentColorPopup(context.Popup);
+        }
+    }
+
+    private bool AccentColorPopupIsCurrent(AccentColorPopupContext context) =>
+        ReferenceEquals(activeColorPopup, context) && context.Popup.IsOpen
+        && SessionIsCurrent(context.Session.Id) && colorControls.Contains(context.Anchor) && context.Anchor.IsLoaded;
+
+    private void SetAccentColorFeedback(AccentColorPopupContext context, string message, bool error = false)
+    {
+        context.Feedback.Text = message;
+        context.Feedback.Visibility = message.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        context.Feedback.Foreground = resourceBrush(error ? "DangerTextBrush" : "MutedTextBrush");
+        context.HexInput.BorderBrush = resourceBrush(error ? "DangerBorderBrush" : "ControlBorderBrush");
+        AutomationProperties.SetItemStatus(context.HexInput, message);
+        AutomationProperties.SetHelpText(context.HexInput,
+            message.Length == 0 ? "Enter #RRGGBB, or leave blank for the role color." : message);
+        context.HexInput.ToolTip = AutomationProperties.GetHelpText(context.HexInput);
+    }
+
+    private static void SetAccentColorWorking(AccentColorPopupContext context, bool working)
+    {
+        context.HexInput.IsEnabled = !working;
+        foreach (var choice in context.Choices) choice.IsEnabled = !working;
     }
 
     private Button CreateColorPresetButton(string key, AgentAccentOption option, Func<string, Task> applyChoice)
@@ -725,44 +796,65 @@ internal sealed class MatchLockCoordinator
         }, false);
     }
 
-    private async Task UpdateAccentColorAsync(CoreSessionSummary session, string key, string value)
+    private async Task<AccentColorChangeResult> UpdateAccentColorAsync(CoreSessionSummary session, string key, string value)
     {
         if (isArenaBusy())
         {
-            return;
+            return new(false, "Another arena operation is running.");
         }
 
         var normalized = AgentAccentService.NormalizeColor(value);
         if (!string.IsNullOrWhiteSpace(value) && string.IsNullOrWhiteSpace(normalized))
         {
             SetBothStatuses("Color must be a valid #RRGGBB hex value.");
-            return;
+            return new(false, "Enter a valid #RRGGBB hex color.");
         }
 
-        await runArenaBusyAsync($"Updating {DisplayLockKey(key)} color...", null, async () =>
+        var result = new AccentColorChangeResult(false, "Color was not saved. Try again.");
+        try
         {
-            var latest = await sessionStore.LoadSnapshotAsync(session.Id);
-            if (latest is null)
+            await runArenaBusyAsync($"Updating {DisplayLockKey(key)} color...", null, async () =>
             {
-                setLoadStatus($"No snapshot found for session {session.Id}.");
-                return;
-            }
+                try
+                {
+                    var latest = await sessionStore.LoadSnapshotAsync(session.Id);
+                    if (latest is null)
+                    {
+                        result = new(false, "The session is unavailable. Reopen the editor.");
+                        if (SessionIsCurrent(session.Id)) setLoadStatus($"No snapshot found for session {session.Id}.");
+                        return;
+                    }
 
-            if (!ApplyAccentColor(latest, key, normalized))
-            {
-                SetBothStatuses($"Could not update {DisplayLockKey(key)} color.");
-                return;
-            }
+                    if (!ApplyAccentColor(latest, key, normalized))
+                    {
+                        result = new(false, "This role is unavailable. Reopen the editor.");
+                        if (SessionIsCurrent(session.Id)) SetBothStatuses($"Could not update {DisplayLockKey(key)} color.");
+                        return;
+                    }
 
-            var status = string.IsNullOrWhiteSpace(normalized)
-                ? $"Reset {DisplayLockKey(key)} color."
-                : $"Updated {DisplayLockKey(key)} color: {normalized}.";
-            await SaveMatchChangeAndReportAsync(latest, session.Id, "native_agent_accent_color_changed", new
-            {
-                key = NormalizeLockKey(key),
-                accent_color = normalized
-            }, status);
-        }, false);
+                    var status = string.IsNullOrWhiteSpace(normalized)
+                        ? $"Reset {DisplayLockKey(key)} color."
+                        : $"Updated {DisplayLockKey(key)} color: {normalized}.";
+                    await saveSnapshotWithFeedbackAsync(latest, session.Id);
+                    result = new(true, "");
+                    await ReportSavedMatchChangeAsync(session.Id, "native_agent_accent_color_changed", new
+                    {
+                        key = NormalizeLockKey(key),
+                        accent_color = normalized
+                    }, status);
+                }
+                catch (Exception exception)
+                {
+                    if (!result.Saved) result = new(false, AppErrorPresenter.Present(exception, AppErrorContext.Settings).DisplayText);
+                    throw;
+                }
+            }, false);
+        }
+        catch (Exception exception)
+        {
+            if (!result.Saved) result = new(false, AppErrorPresenter.Present(exception, AppErrorContext.Settings).DisplayText);
+        }
+        return result;
     }
 
     private async void AgentPressurePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -884,6 +976,11 @@ internal sealed class MatchLockCoordinator
         string sessionId, string eventType, object payload, string outcome)
     {
         await saveSnapshotWithFeedbackAsync(snapshot, sessionId);
+        await ReportSavedMatchChangeAsync(sessionId, eventType, payload, outcome);
+    }
+
+    private async Task ReportSavedMatchChangeAsync(string sessionId, string eventType, object payload, string outcome)
+    {
         var evidence = await AppPostCommitEvidence.TryAppendAsync(
             eventLogStore, sessionId, eventType, payload, AppErrorContext.Settings);
         await CompleteSavedMatchChangeAsync(sessionId, outcome, evidence.Warning);
@@ -1344,5 +1441,11 @@ internal sealed class MatchLockCoordinator
 
     private sealed record RoleDetailPayload(string Title, string Persona);
     private sealed record AccentColorPayload(string Key, string Color, string SessionId);
-    private sealed record AccentColorPopupContext(CoreSessionSummary Session, string Key, Button Anchor, Popup Popup);
+    private sealed record AccentColorPopupContext(CoreSessionSummary Session, string Key, Button Anchor, Popup Popup,
+        TextBox HexInput, TextBlock Feedback)
+    {
+        public bool Saving { get; set; }
+        public List<Button> Choices { get; } = [];
+    }
+    private sealed record AccentColorChangeResult(bool Saved, string Message);
 }

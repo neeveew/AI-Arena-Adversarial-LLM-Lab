@@ -179,6 +179,11 @@ internal static partial class Program
         internal List<string> Statuses { get; } = [];
         internal IEnumerable<string> VisibleStatuses => Refreshes.Concat(Statuses);
         internal bool RefreshFails, SaveFails, LoadStatusFails, ArenaStatusFails, Busy, Rendering;
+        internal bool ManageBusy;
+        internal int SaveAttempts;
+        internal Func<Task>? BeforeSaveAsync;
+        internal Exception? SaveFailure;
+        internal Func<string, Brush>? ResourceOverride;
         internal int LoadStatusAttempts, ArenaStatusAttempts;
         internal Action? AfterSave, AfterRefresh;
 
@@ -192,11 +197,13 @@ internal static partial class Program
             generation = new MatchGenerationService(sessionStore: Store, eventLogStore: events);
             Coordinator = new MatchLockCoordinator(owner, Store, events, generation, () => Active,
                 () => ThemePalette.Resolve("dark-blue"), () => Busy, () => Rendering,
-                _ => Brushes.White, (brush, _, _) => brush,
+                key => ResourceOverride?.Invoke(key) ?? Brushes.White, (brush, _, _) => brush,
                 (_, _, action, _) => LastOperation = RunOperation(action),
                 async (snapshot, id) =>
                 {
-                    if (SaveFails) throw new IOException("primary save failed");
+                    SaveAttempts++;
+                    if (BeforeSaveAsync is not null) await BeforeSaveAsync();
+                    if (SaveFails) throw SaveFailure ?? new IOException("primary save failed");
                     await Store.SaveSnapshotAsync(snapshot, id);
                     AfterSave?.Invoke();
                 },
@@ -213,8 +220,10 @@ internal static partial class Program
 
         private async Task RunOperation(Func<Task> action)
         {
+            if (ManageBusy) { Busy = true; Coordinator.UpdateBusyState(true); }
             try { await action(); }
             catch (Exception exception) { Errors.Add(exception); }
+            finally { if (ManageBusy) { Busy = false; Coordinator.UpdateBusyState(false); } }
         }
 
         internal void RemoveSnapshot()

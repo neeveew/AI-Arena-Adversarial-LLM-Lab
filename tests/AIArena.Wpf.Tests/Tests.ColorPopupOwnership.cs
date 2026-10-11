@@ -69,14 +69,14 @@ internal static partial class Program
     {
         RunStaTest(() => RunWithDispatcherContext(() =>
         {
-            foreach (var deliverCloseBeforeCompletion in new[] { false, true })
+            foreach (var switchBeforeCompletion in new[] { false, true })
             {
                 using var fixture = new ColorPopupFixture();
                 var popup = fixture.Open();
                 var refreshedSessions = new List<string>();
                 var closed = false;
                 fixture.State.AfterRefresh = () => refreshedSessions.Add(fixture.State.Active.Id);
-                if (deliverCloseBeforeCompletion) fixture.State.AfterSave = PumpLifecycleUi;
+                if (switchBeforeCompletion) fixture.State.AfterSave = () => { fixture.State.Active = fixture.Other; PumpLifecycleUi(); };
                 popup.Closed += (_, _) => { closed = true; fixture.State.Active = fixture.Other; };
                 fixture.Choose("Apply");
                 var original = PumpDocumentImportTask(fixture.State.Store.LoadSnapshotAsync())!;
@@ -85,7 +85,7 @@ internal static partial class Program
                         && original.PersistenceRevision == fixture.OriginalRevision + 1 && other.PersistenceRevision == fixture.OtherRevision
                         && refreshedSessions.All(id => id == "default"),
                     $"An accepted choice must retain its original target and never refresh a different session (original {original.Engine.Agents[0].AccentColor}; other {other.Engine.Agents[0].AccentColor}; refreshed {string.Join(",", refreshedSessions)}).");
-                Console.WriteLine($"color popup ownership receipt: close_before_completion={deliverCloseBeforeCompletion}; original_writes=1; other_writes=0; refreshed_sessions=[{string.Join(",", refreshedSessions)}]");
+                Console.WriteLine($"color popup ownership receipt: session_change_before_completion={switchBeforeCompletion}; original_writes=1; other_writes=0; refreshed_sessions=[{string.Join(",", refreshedSessions)}]");
             }
         }));
     }
@@ -157,6 +157,7 @@ internal static partial class Program
             AttachArenaPresentationResources(Host);
             Host.Resources[typeof(Button)] = Host.FindResource("Arena.Button.Base");
             Host.Resources[typeof(TextBox)] = Host.FindResource("Arena.TextBox");
+            State.ResourceOverride = key => Host.TryFindResource(key) as Brush ?? Brushes.White;
             Host.Show();
             PumpLifecycleUi();
         }
@@ -187,12 +188,14 @@ internal static partial class Program
 
         internal void Choose(string choice)
         {
-            Action(choice).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            StartChoice(choice);
             PumpDocumentImportTask(State.LastOperation);
             PumpLifecycleUi();
         }
 
+        internal void StartChoice(string choice) => Action(choice).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
         internal Button Action(string choice) => (choice == "Apply" ? apply : choice == "Reset" ? reset : preset)!;
+        internal TextBox HexInput => CastControlDescendants<TextBox>(popup!.Child).Single();
 
         public void Dispose()
         {
