@@ -36,6 +36,7 @@ internal sealed class MatchLockCoordinator
     private readonly List<Button> colorControls = [];
     private readonly List<Button> actionControls = [];
     private Style? lockToggleStyle;
+    private AccentColorPopupContext? activeColorPopup;
 
     private static readonly string[] RoleDetailLabels =
     [
@@ -85,6 +86,7 @@ internal sealed class MatchLockCoordinator
 
     public void ClearControls()
     {
+        CloseAccentColorPopup();
         lockControls.Clear();
         voiceControls.Clear();
         pressureControls.Clear();
@@ -94,6 +96,7 @@ internal sealed class MatchLockCoordinator
 
     public void UpdateBusyState(bool busy)
     {
+        if (busy) CloseAccentColorPopup();
         foreach (var checkBox in lockControls)
         {
             checkBox.IsEnabled = !busy;
@@ -405,7 +408,7 @@ internal sealed class MatchLockCoordinator
         var button = new Button
         {
             IsEnabled = !isArenaBusy(),
-            Tag = new AccentColorPayload(lockKey, AgentAccentService.NormalizeColor(accentColor)),
+            Tag = new AccentColorPayload(lockKey, AgentAccentService.NormalizeColor(accentColor), activeSession()?.Id ?? ""),
             Width = 32,
             MinWidth = 32,
             Height = 28,
@@ -450,6 +453,16 @@ internal sealed class MatchLockCoordinator
             return;
         }
 
+        OpenAccentColorPopup(button, payload);
+    }
+
+    private Popup? OpenAccentColorPopup(Button button, AccentColorPayload payload)
+    {
+        var session = activeSession();
+        if (session is null || isArenaBusy() || !button.IsEnabled || !button.IsLoaded || !colorControls.Contains(button)
+            || !string.Equals(session.Id, payload.SessionId, StringComparison.OrdinalIgnoreCase)) return null;
+        CloseAccentColorPopup();
+        if (!SessionIsCurrent(session.Id) || isArenaBusy() || !button.IsLoaded || !colorControls.Contains(button)) return null;
         var popup = new Popup
         {
             PlacementTarget = button,
@@ -457,6 +470,8 @@ internal sealed class MatchLockCoordinator
             StaysOpen = false,
             AllowsTransparency = true
         };
+        var context = new AccentColorPopupContext(session, payload.Key, button, popup);
+        Task ApplyChoice(string value) => ApplyAccentColorChoiceAsync(context, value);
 
         var root = new Border
         {
@@ -517,7 +532,7 @@ internal sealed class MatchLockCoordinator
         };
         foreach (var option in AgentAccentService.PresetOptions)
         {
-            swatches.Children.Add(CreateColorPresetButton(payload.Key, option, popup));
+            swatches.Children.Add(CreateColorPresetButton(payload.Key, option, ApplyChoice));
         }
         stack.Children.Add(swatches);
 
@@ -564,8 +579,7 @@ internal sealed class MatchLockCoordinator
         };
         reset.Click += async (_, _) =>
         {
-            popup.IsOpen = false;
-            await UpdateAccentColorAsync(payload.Key, "");
+            await ApplyChoice("");
         };
         actions.Children.Add(reset);
 
@@ -584,20 +598,46 @@ internal sealed class MatchLockCoordinator
         };
         apply.Click += async (_, _) =>
         {
-            popup.IsOpen = false;
-            await UpdateAccentColorAsync(payload.Key, hexText.Text);
+            await ApplyChoice(hexText.Text);
         };
         DockPanel.SetDock(apply, Dock.Right);
         actions.Children.Add(apply);
         stack.Children.Add(actions);
 
         popup.Child = root;
+        RoutedEventHandler anchorUnloaded = (_, _) => CloseAccentColorPopup(popup);
+        button.Unloaded += anchorUnloaded;
+        popup.Closed += (_, _) =>
+        {
+            button.Unloaded -= anchorUnloaded;
+            if (ReferenceEquals(activeColorPopup, context)) activeColorPopup = null;
+        };
+        activeColorPopup = context;
         popup.IsOpen = true;
         hexText.Focus();
         hexText.SelectAll();
+        return popup;
     }
 
-    private Button CreateColorPresetButton(string key, AgentAccentOption option, Popup popup)
+    private void CloseAccentColorPopup(Popup? popup = null)
+    {
+        popup ??= activeColorPopup?.Popup;
+        if (popup is null) return;
+        if (ReferenceEquals(activeColorPopup?.Popup, popup)) activeColorPopup = null;
+        popup.IsOpen = false;
+    }
+
+    private async Task ApplyAccentColorChoiceAsync(AccentColorPopupContext context, string value)
+    {
+        var current = ReferenceEquals(activeColorPopup, context) && context.Popup.IsOpen
+            && SessionIsCurrent(context.Session.Id) && colorControls.Contains(context.Anchor)
+            && context.Anchor.IsLoaded && !isArenaBusy();
+        CloseAccentColorPopup(context.Popup);
+        if (!current) return;
+        await UpdateAccentColorAsync(context.Session, context.Key, value);
+    }
+
+    private Button CreateColorPresetButton(string key, AgentAccentOption option, Func<string, Task> applyChoice)
     {
         var brush = AgentAccentService.ResolveBrush(key, option.Hex, resourceBrush);
         var button = new Button
@@ -622,8 +662,7 @@ internal sealed class MatchLockCoordinator
         };
         button.Click += async (_, _) =>
         {
-            popup.IsOpen = false;
-            await UpdateAccentColorAsync(key, option.Hex);
+            await applyChoice(option.Hex);
         };
         return button;
     }
@@ -686,10 +725,9 @@ internal sealed class MatchLockCoordinator
         }, false);
     }
 
-    private async Task UpdateAccentColorAsync(string key, string value)
+    private async Task UpdateAccentColorAsync(CoreSessionSummary session, string key, string value)
     {
-        var session = activeSession();
-        if (isArenaBusy() || session is null)
+        if (isArenaBusy())
         {
             return;
         }
@@ -1305,5 +1343,6 @@ internal sealed class MatchLockCoordinator
     }
 
     private sealed record RoleDetailPayload(string Title, string Persona);
-    private sealed record AccentColorPayload(string Key, string Color);
+    private sealed record AccentColorPayload(string Key, string Color, string SessionId);
+    private sealed record AccentColorPopupContext(CoreSessionSummary Session, string Key, Button Anchor, Popup Popup);
 }

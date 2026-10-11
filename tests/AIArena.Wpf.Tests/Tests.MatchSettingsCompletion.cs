@@ -236,7 +236,7 @@ internal static partial class Program
                     var tag = kind == "voice" ? "scientific" : "assertive";
                     picker.SelectedItem = picker.Items.Cast<ComboBoxItem>().Single(item => Equals(item.Tag, tag));
                     break;
-                case "color": PumpDocumentImportTask((Task)Call("UpdateAccentColorAsync", "alpha", "#123456")!); break;
+                case "color": PumpDocumentImportTask((Task)Call("UpdateAccentColorAsync", Active, "alpha", "#123456")!); break;
                 case "text": PumpDocumentImportTask((Task)Call("UpdateMatchTextAsync", Active, "topic", "New test topic")!); break;
                 case "lock":
                     Call("MatchLockChanged", new CheckBox { Tag = "alpha", IsChecked = true }, new RoutedEventArgs());
