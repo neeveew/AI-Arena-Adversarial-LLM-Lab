@@ -415,6 +415,8 @@ var tests = new List<(string Name, Action Test)>
     ("match settings completion missing snapshot cannot claim saved", MatchSettingsCompletionMissingSnapshotCannotClaimSaved),
     ("match settings completion shared save feedback cannot prevent commit", MatchSettingsSaveFeedbackCannotPreventCommit),
     ("match settings completion shared save feedback retains primary exception", MatchSettingsSaveFeedbackRetainsPrimaryException),
+    ("cast controls keep every selected style readable", CastControlsKeepEverySelectedStyleReadable),
+    ("cast controls inherit busy state when rebuilt", CastControlsInheritBusyStateWhenRebuilt),
     ("window chrome service packs color refs", WindowChromeServicePacksColorRefs),
     ("app starts internet backend lazily", AppStartsInternetBackendLazily),
     ("searxng supervisor plans bundled launch", SearxngSupervisorPlansBundledLaunch),

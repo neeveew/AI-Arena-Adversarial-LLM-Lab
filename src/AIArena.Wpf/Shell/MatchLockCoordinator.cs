@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -169,11 +170,11 @@ internal sealed class MatchLockCoordinator
         }
         if (isAgentCard)
         {
-            actions.Children.Add(CreateAgentPressurePicker(lockKey, pressureProfile ?? ""));
+            actions.Children.Add(CreateRoleStyleField("Pressure", CreateAgentPressurePicker(lockKey, pressureProfile ?? "")));
         }
         if (isCastCard)
         {
-            actions.Children.Add(CreateVoiceStylePicker(lockKey, voiceStyle ?? ""));
+            actions.Children.Add(CreateRoleStyleField("Voice", CreateVoiceStylePicker(lockKey, voiceStyle ?? "")));
         }
         if (isAgentCard && HasRoleDetails(body))
         {
@@ -284,6 +285,8 @@ internal sealed class MatchLockCoordinator
     {
         var button = new Button
         {
+            IsEnabled = !isArenaBusy(),
+            VerticalAlignment = VerticalAlignment.Center,
             Content = CreatePopupActionContent(glyph, label),
             Tag = tag,
             MinHeight = 28,
@@ -345,25 +348,55 @@ internal sealed class MatchLockCoordinator
 
     private ComboBox CreateVoiceStylePicker(string lockKey, string voiceStyle)
     {
+        var picker = CreateRoleStylePicker(lockKey, "Voice", 148, RoleStyleCatalog.VoiceStyleOptions,
+            RoleStyleCatalog.VoiceStyleLabel, RoleStyleCatalog.NormalizeVoiceStyleTag(voiceStyle),
+            "Communication style for this model");
+        picker.SelectionChanged += VoiceStylePicker_SelectionChanged;
+        voiceControls.Add(picker);
+        return picker;
+    }
+
+    private FrameworkElement CreateRoleStyleField(string label, ComboBox picker)
+    {
+        var caption = new TextBlock { Text = label, FontSize = 10, Foreground = resourceBrush("MutedTextBrush") };
+        AutomationProperties.SetLabeledBy(picker, caption);
+        var field = new StackPanel();
+        field.Children.Add(caption);
+        field.Children.Add(picker);
+        return field;
+    }
+
+    private ComboBox CreateRoleStylePicker(string lockKey, string label, double width,
+        IReadOnlyList<(string Tag, string Label)> options, Func<string?, string> displayLabel,
+        string selectedTag, string help)
+    {
         var picker = new ComboBox
         {
             Tag = lockKey,
-            Width = 132,
+            Width = width,
             MinHeight = 28,
             Padding = new Thickness(6, 3, 6, 3),
             Margin = new Thickness(0, 0, 6, 0),
             FontSize = 11,
-            ToolTip = "Communication style for this model"
+            IsEnabled = !isArenaBusy()
         };
-
-        foreach (var option in RoleStyleCatalog.VoiceStyleOptions)
+        AutomationProperties.SetName(picker, $"{DisplayLockKey(lockKey)} {label.ToLowerInvariant()}");
+        foreach (var option in options)
         {
-            picker.Items.Add(new ComboBoxItem { Content = option.Label, Tag = option.Tag });
+            var item = new ComboBoxItem { Content = displayLabel(option.Tag), Tag = option.Tag, ToolTip = option.Label };
+            AutomationProperties.SetName(item, option.Label);
+            picker.Items.Add(item);
         }
-
-        ShellUiHelpers.SelectComboTag(picker, RoleStyleCatalog.NormalizeVoiceStyleTag(voiceStyle));
-        picker.SelectionChanged += VoiceStylePicker_SelectionChanged;
-        voiceControls.Add(picker);
+        void UpdateHelp()
+        {
+            var value = displayLabel(ShellUiHelpers.SelectedComboTag(picker, "default"));
+            var text = $"{help}. Current: {value}.";
+            picker.ToolTip = text;
+            AutomationProperties.SetHelpText(picker, text);
+        }
+        ShellUiHelpers.SelectComboTag(picker, selectedTag);
+        UpdateHelp();
+        picker.SelectionChanged += (_, _) => UpdateHelp();
         return picker;
     }
 
@@ -371,6 +404,7 @@ internal sealed class MatchLockCoordinator
     {
         var button = new Button
         {
+            IsEnabled = !isArenaBusy(),
             Tag = new AccentColorPayload(lockKey, AgentAccentService.NormalizeColor(accentColor)),
             Width = 32,
             MinWidth = 32,
@@ -401,23 +435,9 @@ internal sealed class MatchLockCoordinator
 
     private ComboBox CreateAgentPressurePicker(string lockKey, string pressureProfile)
     {
-        var picker = new ComboBox
-        {
-            Tag = lockKey,
-            Width = 124,
-            MinHeight = 28,
-            Padding = new Thickness(6, 3, 6, 3),
-            Margin = new Thickness(0, 0, 6, 0),
-            FontSize = 11,
-            ToolTip = "Debate pressure for this agent"
-        };
-
-        foreach (var option in RoleStyleCatalog.AgentPressureOptions)
-        {
-            picker.Items.Add(new ComboBoxItem { Content = option.Label, Tag = option.Tag });
-        }
-
-        ShellUiHelpers.SelectComboTag(picker, RoleStyleCatalog.NormalizeAgentPressureTag(pressureProfile));
+        var picker = CreateRoleStylePicker(lockKey, "Pressure", 116, RoleStyleCatalog.AgentPressureOptions,
+            RoleStyleCatalog.AgentPressureLabel, RoleStyleCatalog.NormalizeAgentPressureTag(pressureProfile),
+            "Debate pressure for this agent");
         picker.SelectionChanged += AgentPressurePicker_SelectionChanged;
         pressureControls.Add(picker);
         return picker;
@@ -637,7 +657,7 @@ internal sealed class MatchLockCoordinator
     private async void VoiceStylePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         var session = activeSession();
-        if (isRenderingSnapshot() || session is null || sender is not ComboBox picker || picker.Tag is not string key)
+        if (isArenaBusy() || isRenderingSnapshot() || session is null || sender is not ComboBox picker || picker.Tag is not string key)
         {
             return;
         }
@@ -710,7 +730,7 @@ internal sealed class MatchLockCoordinator
     private async void AgentPressurePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         var session = activeSession();
-        if (isRenderingSnapshot() || session is null || sender is not ComboBox picker || picker.Tag is not string key)
+        if (isArenaBusy() || isRenderingSnapshot() || session is null || sender is not ComboBox picker || picker.Tag is not string key)
         {
             return;
         }

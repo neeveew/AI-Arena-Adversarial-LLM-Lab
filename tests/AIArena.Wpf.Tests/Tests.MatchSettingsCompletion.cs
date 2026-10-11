@@ -178,7 +178,7 @@ internal static partial class Program
         internal List<string> Refreshes { get; } = [];
         internal List<string> Statuses { get; } = [];
         internal IEnumerable<string> VisibleStatuses => Refreshes.Concat(Statuses);
-        internal bool RefreshFails, SaveFails, LoadStatusFails, ArenaStatusFails;
+        internal bool RefreshFails, SaveFails, LoadStatusFails, ArenaStatusFails, Busy, Rendering;
         internal int LoadStatusAttempts, ArenaStatusAttempts;
         internal Action? AfterSave, AfterRefresh;
 
@@ -191,7 +191,7 @@ internal static partial class Program
                 requireExistingSession: evidenceFails);
             generation = new MatchGenerationService(sessionStore: Store, eventLogStore: events);
             Coordinator = new MatchLockCoordinator(owner, Store, events, generation, () => Active,
-                () => ThemePalette.Resolve("dark-blue"), () => false, () => false,
+                () => ThemePalette.Resolve("dark-blue"), () => Busy, () => Rendering,
                 _ => Brushes.White, (brush, _, _) => brush,
                 (_, _, action, _) => LastOperation = RunOperation(action),
                 async (snapshot, id) =>
