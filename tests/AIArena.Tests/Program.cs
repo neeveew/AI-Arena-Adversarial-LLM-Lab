@@ -65,6 +65,8 @@ var tests = new List<(string Name, Action Test)>
     ("activity log failure cannot conceal authoritative save failure", ArenaTurnStreamingTests.ActivityLogFailureCannotConcealAuthoritativeSaveFailure),
     ("activity log late atomic completion is observed without replay", ArenaTurnStreamingTests.ActivityLogLateAtomicCompletionIsObservedWithoutReplay),
     ("activity log healthy workflows retain ordered evidence", ArenaTurnStreamingTests.ActivityLogHealthyWorkflowsRetainOrderedEvidence),
+    ("postcommit log held leases release saved state", ArenaTurnStreamingTests.PostCommitLogHeldLeasesReleaseSavedState),
+    ("postcommit log late atomic completion remains unreplayed", ArenaTurnStreamingTests.PostCommitLogLateAtomicCompletionRemainsUnreplayed),
     ("narrator fallback retains terminal provider outcomes", ArenaTurnStreamingTests.NarratorFallbackRetainsTerminalProviderOutcomes),
     ("narrator fallback retains accepted failed partial output", ArenaTurnStreamingTests.NarratorFallbackRetainsAcceptedFailedPartialOutput),
     ("narrator fallback keeps eligible empty transport failures", ArenaTurnStreamingTests.NarratorFallbackKeepsEligibleEmptyTransportFailures),

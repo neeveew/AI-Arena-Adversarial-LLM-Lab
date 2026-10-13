@@ -106,6 +106,7 @@ var tests = new List<(string Name, Action Test)>
     ("optimization saved state template mutations retain committed outcome", SavedStateTemplateMutationsRetainCommittedOutcome),
     ("optimization saved state post commit completion ignores caller cancellation", SavedStatePostCommitCompletionIgnoresCallerCancellation),
     ("optimization saved state failed commit skips secondary completion", SavedStateFailedCommitSkipsSecondaryCompletion),
+    ("postcommit log held lease does not hide checkpoint restore", PostCommitLogHeldLeaseDoesNotHideCheckpointRestore),
     ("optimization provider settings download keeps captured session and credentials", ProviderSettingsDownloadKeepsCapturedSessionAndCredentials),
     ("optimization provider settings download retires initial and polled failures", ProviderSettingsDownloadRetiresInitialAndPolledFailures),
     ("optimization provider settings catalog rejects stale session provider and selection", ProviderSettingsCatalogRejectsStaleSessionProviderAndSelection),

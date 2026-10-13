@@ -14,10 +14,10 @@ public static class PostCommitEvidence
         EventLogStore eventLogStore, string sessionId, string eventType, object payload)
     {
         ArgumentNullException.ThrowIfNull(eventLogStore);
-        // Cancellation belonged to the transaction that already committed.
-        // Required completion evidence now has its own bounded store lifetime.
-        return TryCompleteAsync(() => eventLogStore.AppendAsync(
-            sessionId, eventType, payload, CancellationToken.None));
+        // Caller cancellation belonged to the transaction that already committed.
+        // Bound only the optional wait; atomic writes already underway may finish later.
+        return ActivityLogWrite.TryAppendAsync(
+            eventLogStore, sessionId, eventType, payload, CancellationToken.None);
     }
 
     public static async Task<Exception?> TryCompleteAsync(Func<Task> completion)
