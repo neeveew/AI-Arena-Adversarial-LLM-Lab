@@ -1,6 +1,7 @@
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
 using AIArena.Core.Services;
+using AIArena.Wpf.Services;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 
 namespace AIArena.Wpf;
@@ -98,6 +99,7 @@ internal sealed class RivalryMatrixControlService
         }
 
         var completed = false;
+        var completedMessage = "";
         AIArenaRivalryMatrixControlState? finalState = null;
         await runBusyAsync("Applying relationship pattern...", async operationCancellationToken =>
         {
@@ -125,15 +127,17 @@ internal sealed class RivalryMatrixControlService
             }));
 
             await sessionStore.SaveSnapshotAsync(snapshot, session.Id, linked.Token);
-            await eventLogStore.AppendAsync(session.Id, "native_rivalry_matrix_pattern_applied", new
-            {
-                pattern = normalized,
-                snapshot.Engine.RivalryMatrix.Enabled,
-                links = links.Select(link => new { link.Source, link.Target, link.Stance }).ToArray()
-            }, linked.Token);
             finalState = State(session.Id, snapshot, normalized);
-            await refreshActiveSessionAsync(MatrixSummary(finalState), linked.Token);
             completed = true;
+            completedMessage = await AppPostCommitEvidence.CompleteSavedChangeAsync(
+                eventLogStore, session.Id, "native_rivalry_matrix_pattern_applied", new
+                {
+                    pattern = normalized,
+                    snapshot.Engine.RivalryMatrix.Enabled,
+                    links = links.Select(link => new { link.Source, link.Target, link.Stance }).ToArray()
+                }, MatrixSummary(finalState), AppErrorContext.Arena,
+                () => string.Equals(activeSession()?.Id, session.Id, StringComparison.OrdinalIgnoreCase),
+                outcome => refreshActiveSessionAsync(outcome, CancellationToken.None));
         });
 
         if (!completed || finalState is null)
@@ -141,7 +145,7 @@ internal sealed class RivalryMatrixControlService
             return Failure("operation_failed", "The relationship pattern did not complete.", await CaptureAsync(cancellationToken));
         }
 
-        return new AIArenaRivalryMatrixControlResult(true, "", MatrixSummary(finalState), finalState);
+        return new AIArenaRivalryMatrixControlResult(true, "", completedMessage, finalState);
     }
 
     private static string? NormalizePattern(string pattern)

@@ -104,6 +104,32 @@ internal static class AppPostCommitEvidence
             feedbackError, "save feedback could not be fully updated", context, saved: true);
     }
 
+    /// <summary>Completes a saved change without letting optional evidence or views erase its result.</summary>
+    internal static async Task<string> CompleteSavedChangeAsync(
+        EventLogStore eventLogStore, string sessionId, string eventType, object payload,
+        string outcome, AppErrorContext context, Func<bool> isCurrent,
+        Func<string, Task> refresh, Action<string>? publishWarning = null)
+    {
+        var evidence = await TryAppendAsync(eventLogStore, sessionId, eventType, payload, context);
+        outcome = evidence.AppendTo(outcome);
+        var refreshWarning = await TryCompleteAsync(async () =>
+        {
+            if (isCurrent()) await refresh(outcome);
+        }, "the current view could not be refreshed", context);
+        if (string.IsNullOrWhiteSpace(refreshWarning)) return outcome;
+        outcome = AppendWarning(outcome, refreshWarning);
+        if (publishWarning is not null)
+        {
+            var feedbackWarning = await TryCompleteAsync(() =>
+            {
+                if (isCurrent()) publishWarning(outcome);
+                return Task.CompletedTask;
+            }, "saved feedback could not be fully updated", context);
+            outcome = AppendWarning(outcome, feedbackWarning);
+        }
+        return outcome;
+    }
+
     internal static async Task<AppPostCommitEvidenceResult> TryAppendAsync(
         EventLogStore eventLogStore,
         string sessionId,

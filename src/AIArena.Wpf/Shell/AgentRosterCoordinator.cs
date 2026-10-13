@@ -1,6 +1,7 @@
 using System.Windows.Controls;
 using AIArena.Core.Persistence;
 using AIArena.Core.Services;
+using AIArena.Wpf.Services;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 
 namespace AIArena.Wpf;
@@ -152,22 +153,25 @@ internal sealed class AgentRosterCoordinator
         }
 
         var completed = false;
+        var completedMessage = $"Agent roster resized: {count} active agents.";
         await runArenaBusyAsync($"Resizing cast to {count} agents...", applyAgentCountButton, async () =>
         {
             var snapshot = await sessionStore.LoadSnapshotAsync(session.Id) ?? SessionStore.CreateDefaultSnapshot();
             AgentRosterService.EnsureParticipantCount(snapshot, count);
             await saveSnapshotWithFeedbackAsync(snapshot, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_agent_roster_resized", new
-            {
-                Count = count,
-                Agents = snapshot.Engine.Agents.Where(agent => agent.Active).Select(agent => agent.Id).ToArray()
-            });
-            await refreshActiveSessionAsync($"Agent roster resized: {count} active agents.");
             completed = true;
+            completedMessage = await AppPostCommitEvidence.CompleteSavedChangeAsync(
+                eventLogStore, session.Id, "native_agent_roster_resized", new
+                {
+                    Count = count,
+                    Agents = snapshot.Engine.Agents.Where(agent => agent.Active).Select(agent => agent.Id).ToArray()
+                }, completedMessage, AppErrorContext.Arena,
+                () => string.Equals(activeSession()?.Id, session.Id, StringComparison.OrdinalIgnoreCase),
+                refreshActiveSessionAsync, setArenaRunStatus);
         }, true);
 
         return completed
-            ? new AIArenaAgentRosterResizeResult(true, "", $"Agent roster resized to {count} active agent(s).", count)
+            ? new AIArenaAgentRosterResizeResult(true, "", completedMessage, count)
             : new AIArenaAgentRosterResizeResult(false, "operation_failed", "The agent roster resize did not complete.", count);
     }
 
