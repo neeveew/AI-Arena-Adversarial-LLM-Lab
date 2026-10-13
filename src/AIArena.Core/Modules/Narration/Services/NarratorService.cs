@@ -90,12 +90,13 @@ public sealed class NarratorService : IDisposable
             return DecisionCardResult.Failed("No provider config for narrator.");
         }
 
+        var completionExecutor = new ArenaCompletionExecutor(_modelClient, null);
         var thinkingCommitted = false;
         try
         {
             await MarkNarratorThinkingAsync(snapshot, sessionId, cancellationToken);
             thinkingCommitted = true;
-            await _eventLogStore.AppendAsync(sessionId, "native_decision_card_started", new { model = config.Model }, cancellationToken);
+            await completionExecutor.ActivityLog.AppendAsync(_eventLogStore, sessionId, "native_decision_card_started", new { model = config.Model }, cancellationToken);
 
             var completion = await CompleteWithInternetAsync(
                 sessionId,
@@ -107,7 +108,7 @@ public sealed class NarratorService : IDisposable
                     additionalMessage),
                 "native_decision_card",
                 "operator-facing decision card",
-                cancellationToken);
+                cancellationToken, completionExecutor);
             var result = completion.Result;
 
             snapshot.Engine.DecisionCard.Text = result.Ok ? result.Text.Trim() : $"Decision card failed: {result.Error}";
@@ -120,8 +121,7 @@ public sealed class NarratorService : IDisposable
             snapshot.Engine.LastError = result.Ok ? "" : result.Error;
 
             await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-            var evidenceError = await PostCommitEvidence.TryAppendAsync(
-                _eventLogStore,
+            await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
                 sessionId,
                 result.Ok ? "native_decision_card_completed" : "native_decision_card_failed",
                 new { result.Model, result.LatencyMs, error = result.Error });
@@ -131,7 +131,7 @@ public sealed class NarratorService : IDisposable
             return outcome with
             {
                 Committed = true,
-                EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+                EvidenceWarning = completionExecutor.ActivityLog.SavedWarning
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -184,7 +184,7 @@ public sealed class NarratorService : IDisposable
         {
             await MarkNarratorThinkingAsync(snapshot, sessionId, cancellationToken);
             thinkingCommitted = true;
-            await _eventLogStore.AppendAsync(
+            await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
                 sessionId,
                 string.IsNullOrWhiteSpace(operatorRequest) ? "native_narrator_started" : "native_narrator_operator_request_started",
                 new { model = config.Model },
@@ -231,8 +231,7 @@ public sealed class NarratorService : IDisposable
 
             await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
             progressScope.Complete(message);
-            var evidenceError = await PostCommitEvidence.TryAppendAsync(
-                _eventLogStore,
+            await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
                 sessionId,
                 result.Ok
                     ? string.IsNullOrWhiteSpace(operatorRequest) ? "native_narrator_completed" : "native_narrator_operator_request_completed"
@@ -241,7 +240,7 @@ public sealed class NarratorService : IDisposable
             var outcome = result.Ok
                 ? NarratorResult.Completed(message)
                 : NarratorResult.Failed(result.Error, message);
-            return outcome with { EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError) };
+            return outcome with { EvidenceWarning = completionExecutor.ActivityLog.SavedWarning };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -383,10 +382,11 @@ public sealed class NarratorService : IDisposable
         if (safeRequest)
         {
             persistedRequest = candidateRequest;
-            toolResult = await _internetToolService.ExecuteAsync(
+            toolResult = await _internetToolService.ExecuteWithActivityLogAsync(
                 snapshot,
                 persistedRequest,
                 sessionId,
+                completionExecutor.ActivityLog,
                 cancellationToken);
         }
         else
@@ -402,7 +402,7 @@ public sealed class NarratorService : IDisposable
             };
         }
 
-        await _eventLogStore.AppendAsync(
+        await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
             sessionId,
             toolResult.Ok ? $"{eventPrefix}_internet_context_retrieved" : $"{eventPrefix}_internet_context_failed",
             safeRequest
@@ -473,7 +473,7 @@ public sealed class NarratorService : IDisposable
             return new NarratorAttempt(result, primaryPrompt.Receipt);
         }
 
-        await _eventLogStore.AppendAsync(
+        await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
             sessionId,
             fallbackEvent,
             new { failedModel = config.Model, fallbackModel = fallbackConfig.Model, error = result.Error },

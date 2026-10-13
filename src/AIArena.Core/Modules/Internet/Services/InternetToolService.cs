@@ -39,11 +39,16 @@ public sealed partial class InternetToolService : IDisposable
         _eventLogStore = eventLogStore;
     }
 
-    public async Task<InternetToolResult> ExecuteAsync(
+    public Task<InternetToolResult> ExecuteAsync(
         ArenaSnapshot snapshot,
         InternetToolRequest request,
         string sessionId = "default",
         CancellationToken cancellationToken = default)
+        => ExecuteWithActivityLogAsync(snapshot, request, sessionId, new ActivityLogScope(), cancellationToken);
+
+    internal async Task<InternetToolResult> ExecuteWithActivityLogAsync(
+        ArenaSnapshot snapshot, InternetToolRequest request, string sessionId,
+        ActivityLogScope activityLog, CancellationToken cancellationToken)
     {
         if (!InternetToolContract.TryValidate(request, out request, out var contractError))
         {
@@ -78,7 +83,7 @@ public sealed partial class InternetToolService : IDisposable
                 Url = request.Url,
                 Error = error
             };
-            await LogAsync(sessionId, request, rejected, cancellationToken);
+            await LogAsync(sessionId, request, rejected, cancellationToken, activityLog: activityLog);
             return rejected;
         }
 
@@ -108,13 +113,13 @@ public sealed partial class InternetToolService : IDisposable
                 Error = error,
                 CheckedAt = DateTimeOffset.Now
             };
-            await LogAsync(sessionId, bounded, rejected, cancellationToken);
+            await LogAsync(sessionId, bounded, rejected, cancellationToken, activityLog: activityLog);
             return rejected;
         }
 
         var (result, cached) = await ExecuteProviderWithCacheAsync(sessionId, bounded, settings, cancellationToken);
         result = WithCacheState(result, cached);
-        await LogAsync(sessionId, bounded, result, cancellationToken, cached);
+        await LogAsync(sessionId, bounded, result, cancellationToken, cached, activityLog);
         return result;
     }
 
@@ -465,14 +470,15 @@ public sealed partial class InternetToolService : IDisposable
         };
     }
 
-    private async Task LogAsync(string sessionId, InternetToolRequest request, InternetToolResult result, CancellationToken cancellationToken, bool cached = false)
+    private async Task LogAsync(string sessionId, InternetToolRequest request, InternetToolResult result, CancellationToken cancellationToken,
+        bool cached = false, ActivityLogScope? activityLog = null)
     {
         if (_eventLogStore is null)
         {
             return;
         }
 
-        await _eventLogStore.AppendAsync(
+        await (activityLog ?? new ActivityLogScope()).AppendAsync(_eventLogStore,
             sessionId,
             result.Ok ? "native_internet_tool_completed" : "native_internet_tool_failed",
             new

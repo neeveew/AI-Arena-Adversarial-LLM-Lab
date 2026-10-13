@@ -1,13 +1,15 @@
 using AIArena.Core.Models;
+using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
 
 namespace AIArena.Core.Services;
 
-/// <summary>One bounded recovery across all calls belonging to a single causal operation.</summary>
+/// <summary>Shares bounded recovery and optional activity evidence across one causal operation.</summary>
 internal sealed class ArenaCompletionExecutor(IModelProviderClient client, ArenaTurnProgressScope? progressScope)
 {
     internal const string RecoveryMetadataKey = "reasoning_only_recovery";
     private readonly ModelCompletionRecoveryScope recovery = new();
+    internal ActivityLogScope ActivityLog { get; } = new();
     internal bool RecoveryUsed => recovery.RecoveryUsed;
 
     internal Task<ModelCompletionResult> CompleteAsync(ModelProviderConfig config,

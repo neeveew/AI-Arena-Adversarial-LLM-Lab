@@ -90,12 +90,13 @@ public sealed class ContextRecoveryService
 
         snapshot.Engine.LastError = "";
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-        var evidenceError = await PostCommitEvidence.TryAppendAsync(
+        var activityLog = new ActivityLogScope();
+        await activityLog.AppendAsync(
             _eventLogStore, sessionId, "context_recovery_turn_skipped",
             new { turn = message.Turn, speaker = message.SpeakerId, failure_kind = "context_limit_exceeded" });
         return ContextRecoveryResult.Completed(message) with
         {
-            EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+            EvidenceWarning = activityLog.SavedWarning
         };
     }
 
@@ -182,7 +183,7 @@ public sealed class ContextRecoveryService
         var continuationCommitted = false;
         try
         {
-            await _eventLogStore.AppendAsync(
+            await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
                 sessionId,
                 "context_recovery_output_continue_started",
                 new { turn = original.Turn, speaker = original.SpeakerId, attempt = attemptId },
@@ -219,7 +220,7 @@ public sealed class ContextRecoveryService
             if (!budgeted.Ok)
             {
                 await AppendContinuationFailedEventAsync(sessionId, original, attemptId,
-                    ModelCompletionOutcomeClassifier.FailureKindWire(budgeted.FailureKind));
+                    ModelCompletionOutcomeClassifier.FailureKindWire(budgeted.FailureKind), completionExecutor.ActivityLog);
                 return ContextRecoveryResult.Failed(budgeted.Error);
             }
 
@@ -231,7 +232,7 @@ public sealed class ContextRecoveryService
                     ? "The model returned no continuation content."
                     : completion.Error;
                 await AppendContinuationFailedEventAsync(sessionId, original, attemptId,
-                    ModelCompletionOutcomeClassifier.FailureKindWire(completion.FailureKind));
+                    ModelCompletionOutcomeClassifier.FailureKindWire(completion.FailureKind), completionExecutor.ActivityLog);
                 return new ContextRecoveryResult(false, true, original, completion, error);
             }
 
@@ -245,7 +246,7 @@ public sealed class ContextRecoveryService
                 || !MetadataString(currentOriginal, "output_continuation_attempt").Equals(attemptId, StringComparison.Ordinal)
                 || !DialogueMessageIdentity.Fingerprint(currentOriginal).Equals(originalFingerprint, StringComparison.Ordinal))
             {
-                await AppendContinuationFailedEventAsync(sessionId, original, attemptId, "source_changed");
+                await AppendContinuationFailedEventAsync(sessionId, original, attemptId, "source_changed", completionExecutor.ActivityLog);
                 return ContextRecoveryResult.Failed("The session or source response changed before the continuation finished.");
             }
 
@@ -284,7 +285,7 @@ public sealed class ContextRecoveryService
             await _sessionStore.SaveSnapshotAsync(current, sessionId, cancellationToken);
             continuationCommitted = true;
             progressScope.Complete(replacement);
-            var evidenceError = await PostCommitEvidence.TryAppendAsync(
+            await completionExecutor.ActivityLog.AppendAsync(
                 _eventLogStore, sessionId, "context_recovery_output_continued",
                 new
                 {
@@ -295,7 +296,7 @@ public sealed class ContextRecoveryService
                 });
             return ContextRecoveryResult.Completed(replacement, completion) with
             {
-                EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+                EvidenceWarning = completionExecutor.ActivityLog.SavedWarning
             };
         }
         catch (OperationCanceledException)
@@ -306,7 +307,7 @@ public sealed class ContextRecoveryService
         catch
         {
             progressScope.Interrupt("failed");
-            await AppendContinuationFailedEventAsync(sessionId, original, attemptId, "continuation_exception");
+            await AppendContinuationFailedEventAsync(sessionId, original, attemptId, "continuation_exception", completionExecutor.ActivityLog);
             throw;
         }
         finally
@@ -357,7 +358,8 @@ public sealed class ContextRecoveryService
         {
             return ContextRecoveryResult.Failed("The session changed before the end-match marker could be saved.");
         }
-        var evidenceError = await PostCommitEvidence.TryAppendAsync(
+        var activityLog = new ActivityLogScope();
+        await activityLog.AppendAsync(
             _eventLogStore, sessionId, "context_recovery_match_ended", new { reason = normalizedReason });
         var marker = new DialogueMessage
         {
@@ -375,7 +377,7 @@ public sealed class ContextRecoveryService
         };
         return ContextRecoveryResult.Completed(marker) with
         {
-            EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+            EvidenceWarning = activityLog.SavedWarning
         };
     }
 
@@ -414,11 +416,12 @@ public sealed class ContextRecoveryService
         string sessionId,
         DialogueMessage original,
         string attemptId,
-        string reason)
+        string reason,
+        ActivityLogScope activityLog)
     {
         try
         {
-            await _eventLogStore.AppendAsync(
+            await activityLog.AppendAsync(_eventLogStore,
                 sessionId,
                 "context_recovery_output_continue_failed",
                 new { turn = original.Turn, speaker = original.SpeakerId, attempt = attemptId, reason },

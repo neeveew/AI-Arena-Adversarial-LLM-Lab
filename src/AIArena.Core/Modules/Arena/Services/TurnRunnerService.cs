@@ -230,7 +230,7 @@ public sealed class TurnRunnerService
         try
         {
             await MarkAgentThinkingAsync(snapshot, sessionId, agent, cancellationToken);
-            await _eventLogStore.AppendAsync(
+            await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
                 sessionId,
                 $"{eventPrefix}_started",
                 new
@@ -247,7 +247,7 @@ public sealed class TurnRunnerService
         var internetFastMode = !factoryMode && InternetFastMode(snapshot, plan.Config!);
         var proactiveInternet = factoryMode
             ? null
-            : await TryBuildProactiveInternetContextAsync(sessionId, snapshot, plan.AgentId, plan.Config!, eventPrefix, cancellationToken);
+            : await TryBuildProactiveInternetContextAsync(sessionId, snapshot, plan.AgentId, plan.Config!, eventPrefix, cancellationToken, completionExecutor.ActivityLog);
         ModelChatMessage? internetContextMessage = null;
         if (proactiveInternet is not null)
         {
@@ -298,10 +298,11 @@ public sealed class TurnRunnerService
                 requestedByAgent = candidateRequest;
                 var internetExecutionSnapshot = preparedTurn.Context?.CreateInternetExecutionSnapshot()
                     ?? snapshot;
-                toolResult = await _internetToolService.ExecuteAsync(
+                toolResult = await _internetToolService.ExecuteWithActivityLogAsync(
                     internetExecutionSnapshot,
                     requestedByAgent,
                     sessionId,
+                    completionExecutor.ActivityLog,
                     cancellationToken);
             }
             else
@@ -317,7 +318,7 @@ public sealed class TurnRunnerService
                 };
             }
 
-            await _eventLogStore.AppendAsync(
+            await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
                 sessionId,
                 toolResult.Ok ? $"{eventPrefix}_internet_context_retrieved" : $"{eventPrefix}_internet_context_failed",
                 safeRequest
@@ -386,8 +387,7 @@ public sealed class TurnRunnerService
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         progressScope.Complete(message);
-        var evidenceError = await PostCommitEvidence.TryAppendAsync(
-            _eventLogStore,
+        await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
             sessionId,
             result.Ok ? $"{eventPrefix}_completed" : $"{eventPrefix}_failed",
             new
@@ -399,7 +399,7 @@ public sealed class TurnRunnerService
             });
             return OneTurnResult.Completed(plan, message, result) with
             {
-                EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+                EvidenceWarning = completionExecutor.ActivityLog.SavedWarning
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -451,7 +451,7 @@ public sealed class TurnRunnerService
         var completionExecutor = new ArenaCompletionExecutor(_modelClient, progressScope);
         try
         {
-            await _eventLogStore.AppendAsync(
+            await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
                 sessionId,
                 "native_retry_message_started",
                 new { turn = original.Turn, speaker = plan.AgentId, model = plan.Config!.Model, factory_mode = factoryMode },
@@ -537,8 +537,7 @@ public sealed class TurnRunnerService
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         progressScope.Complete(replacement);
-        var evidenceError = await PostCommitEvidence.TryAppendAsync(
-            _eventLogStore,
+        await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
             sessionId,
             result.Ok ? "native_retry_message_replaced" : "native_retry_message_failed",
             new
@@ -550,7 +549,7 @@ public sealed class TurnRunnerService
             });
             return OneTurnResult.Completed(plan, replacement, result) with
             {
-                EvidenceWarning = PostCommitEvidence.WarningFor(evidenceError)
+                EvidenceWarning = completionExecutor.ActivityLog.SavedWarning
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -678,7 +677,8 @@ public sealed class TurnRunnerService
         string requesterId,
         ModelProviderConfig config,
         string eventPrefix,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ActivityLogScope activityLog)
     {
         if (!CanRequestInternetTool(snapshot, requesterId))
         {
@@ -688,7 +688,7 @@ public sealed class TurnRunnerService
         var operatorRequest = LatestOperatorRequest(snapshot);
         if (InternetRequestSafety.ContainsSensitivePayload(operatorRequest))
         {
-            await _eventLogStore.AppendAsync(
+            await activityLog.AppendAsync(_eventLogStore,
                 sessionId,
                 $"{eventPrefix}_proactive_internet_context_blocked",
                 new { speaker = requesterId, blocked_sensitive_payload = true },
@@ -743,7 +743,7 @@ public sealed class TurnRunnerService
         if (request.Tool.Equals(InternetToolNames.WebSearch, StringComparison.OrdinalIgnoreCase)
             && TryBuildFreshSourceMemoryContext(snapshot, request, out var memoryContext))
         {
-            await _eventLogStore.AppendAsync(
+            await activityLog.AppendAsync(_eventLogStore,
                 sessionId,
                 $"{eventPrefix}_proactive_internet_context_reused",
                 new { speaker = requesterId, request.Tool, request.Query, Sources = memoryContext.Result.Sources.Count, memoryContext.Result.CheckedAt, fast_mode = fastMode },
@@ -753,8 +753,8 @@ public sealed class TurnRunnerService
                 : memoryContext;
         }
 
-        var result = await _internetToolService.ExecuteAsync(snapshot, request, sessionId, cancellationToken);
-        await _eventLogStore.AppendAsync(
+        var result = await _internetToolService.ExecuteWithActivityLogAsync(snapshot, request, sessionId, activityLog, cancellationToken);
+        await activityLog.AppendAsync(_eventLogStore,
             sessionId,
             result.Ok ? $"{eventPrefix}_proactive_internet_context_retrieved" : $"{eventPrefix}_proactive_internet_context_failed",
             new { speaker = requesterId, request.Tool, request.Query, request.Url, result.Ok, result.Error, Sources = result.Sources.Count, fast_mode = fastMode },
@@ -1646,7 +1646,8 @@ public sealed class TurnRunnerService
             return result;
         }
 
-        await _eventLogStore.AppendAsync(sessionId, $"{eventPrefix}_empty_content_retry", new { speaker = plan.AgentId, model = result.Model, leaked_tool_status = LeaksInternetToolStatus(result.Text) }, cancellationToken);
+        completionExecutor ??= new ArenaCompletionExecutor(_modelClient, null);
+        await completionExecutor.ActivityLog.AppendAsync(_eventLogStore, sessionId, $"{eventPrefix}_empty_content_retry", new { speaker = plan.AgentId, model = result.Model, leaked_tool_status = LeaksInternetToolStatus(result.Text) }, cancellationToken);
         var repaired = await CompleteWithFallbackAsync(
             sessionId,
             snapshot,
@@ -1900,7 +1901,7 @@ public sealed class TurnRunnerService
             return result;
         }
 
-        await _eventLogStore.AppendAsync(
+        await completionExecutor.ActivityLog.AppendAsync(_eventLogStore,
             sessionId,
             eventName,
             new { speaker = plan.AgentId, failedModel = preparedTurnContext.PrimaryConfig.Model, fallbackModel = preparedTurnContext.FallbackConfig.Model, error = result.Error },
