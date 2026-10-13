@@ -815,13 +815,13 @@ internal sealed class MatchLockCoordinator
             var latest = await sessionStore.LoadSnapshotAsync(session.Id);
             if (latest is null)
             {
-                setLoadStatus($"No snapshot found for session {session.Id}.");
+                await ReportMatchProblemAsync(session.Id, $"No snapshot found for session {session.Id}.");
                 return;
             }
 
             if (!ApplyVoiceStyle(latest, key, voiceStyle))
             {
-                SetBothStatuses($"Could not update {DisplayLockKey(key)} voice.");
+                await ReportMatchProblemAsync(session.Id, $"Could not update {DisplayLockKey(key)} voice.", includeArenaStatus: true);
                 return;
             }
 
@@ -843,7 +843,7 @@ internal sealed class MatchLockCoordinator
         var normalized = AgentAccentService.NormalizeColor(value);
         if (!string.IsNullOrWhiteSpace(value) && string.IsNullOrWhiteSpace(normalized))
         {
-            SetBothStatuses("Color must be a valid #RRGGBB hex value.");
+            await ReportMatchProblemAsync(session.Id, "Color must be a valid #RRGGBB hex value.", includeArenaStatus: true);
             return new(false, "Enter a valid #RRGGBB hex color.");
         }
 
@@ -858,14 +858,14 @@ internal sealed class MatchLockCoordinator
                     if (latest is null)
                     {
                         result = new(false, "The session is unavailable. Reopen the editor.");
-                        if (SessionIsCurrent(session.Id)) setLoadStatus($"No snapshot found for session {session.Id}.");
+                        await ReportMatchProblemAsync(session.Id, $"No snapshot found for session {session.Id}.");
                         return;
                     }
 
                     if (!ApplyAccentColor(latest, key, normalized))
                     {
                         result = new(false, "This role is unavailable. Reopen the editor.");
-                        if (SessionIsCurrent(session.Id)) SetBothStatuses($"Could not update {DisplayLockKey(key)} color.");
+                        await ReportMatchProblemAsync(session.Id, $"Could not update {DisplayLockKey(key)} color.", includeArenaStatus: true);
                         return;
                     }
 
@@ -909,13 +909,13 @@ internal sealed class MatchLockCoordinator
             var latest = await sessionStore.LoadSnapshotAsync(session.Id);
             if (latest is null)
             {
-                setLoadStatus($"No snapshot found for session {session.Id}.");
+                await ReportMatchProblemAsync(session.Id, $"No snapshot found for session {session.Id}.");
                 return;
             }
 
             if (!ApplyAgentPressure(latest, key, pressure))
             {
-                SetBothStatuses($"Could not update {DisplayLockKey(key)} pressure.");
+                await ReportMatchProblemAsync(session.Id, $"Could not update {DisplayLockKey(key)} pressure.", includeArenaStatus: true);
                 return;
             }
 
@@ -942,7 +942,7 @@ internal sealed class MatchLockCoordinator
             var change = await matchGeneration.ToggleLockWithEvidenceAsync(session.Id, key, locked);
             if (!change.Changed)
             {
-                if (SessionIsCurrent(session.Id)) setLoadStatus($"No snapshot found for session {session.Id}.");
+                await ReportMatchProblemAsync(session.Id, $"No snapshot found for session {session.Id}.");
                 return;
             }
             await CompleteSavedMatchChangeAsync(session.Id, $"{key} lock {(locked ? "enabled" : "disabled")}.", change.Warning);
@@ -962,7 +962,7 @@ internal sealed class MatchLockCoordinator
         if (!MatchMutationBindingIsCurrent(button, binding) || isArenaBusy()) return;
         if (snapshot is null)
         {
-            SetBothStatuses($"No snapshot found for session {session.Id}.");
+            await ReportMatchProblemAsync(session.Id, $"No snapshot found for session {session.Id}.", includeArenaStatus: true);
             return;
         }
 
@@ -970,13 +970,13 @@ internal sealed class MatchLockCoordinator
         var edited = TextEditDialog.Show(owner, theme(), $"Edit {DisplayLockKey(key)}", current);
         if (edited is null)
         {
-            setLoadStatus("Edit cancelled.");
+            await ReportMatchProblemAsync(session.Id, "Edit cancelled.");
             return;
         }
 
         if (string.IsNullOrWhiteSpace(edited))
         {
-            SetBothStatuses("Edit text is empty.");
+            await ReportMatchProblemAsync(session.Id, "Edit text is empty.", includeArenaStatus: true);
             return;
         }
 
@@ -990,13 +990,13 @@ internal sealed class MatchLockCoordinator
             var latest = await sessionStore.LoadSnapshotAsync(session.Id);
             if (latest is null)
             {
-                setLoadStatus($"No snapshot found for session {session.Id}.");
+                await ReportMatchProblemAsync(session.Id, $"No snapshot found for session {session.Id}.");
                 return;
             }
 
             if (!ApplyMatchTextEdit(latest, key, edited))
             {
-                SetBothStatuses($"Could not edit {key}.");
+                await ReportMatchProblemAsync(session.Id, $"Could not edit {key}.", includeArenaStatus: true);
                 return;
             }
 
@@ -1012,6 +1012,24 @@ internal sealed class MatchLockCoordinator
 
     private bool SessionIsCurrent(string sessionId) =>
         string.Equals(activeSession()?.Id, sessionId, StringComparison.OrdinalIgnoreCase);
+
+    private async Task ReportMatchProblemAsync(string sessionId, string status, bool includeArenaStatus = false)
+    {
+        // Feedback belongs to the admitted session, and each view can fail or change sessions independently.
+        await PostCommitEvidence.TryCompleteAsync(() =>
+        {
+            if (SessionIsCurrent(sessionId)) setLoadStatus(status);
+            return Task.CompletedTask;
+        });
+        if (includeArenaStatus)
+        {
+            await PostCommitEvidence.TryCompleteAsync(() =>
+            {
+                if (SessionIsCurrent(sessionId)) setArenaRunStatus(status);
+                return Task.CompletedTask;
+            });
+        }
+    }
 
     private async Task SaveMatchChangeAndReportAsync(AIArena.Core.Models.ArenaSnapshot snapshot,
         string sessionId, string eventType, object payload, string outcome)
@@ -1467,12 +1485,6 @@ internal sealed class MatchLockCoordinator
             .Min();
         var value = persona[valueStart..next].Trim(' ', '\r', '\n', '\t', '.');
         return string.IsNullOrWhiteSpace(value) ? "" : $"{label} {value}";
-    }
-
-    private void SetBothStatuses(string status)
-    {
-        setLoadStatus(status);
-        setArenaRunStatus(status);
     }
 
     private static bool IsParticipant(string speakerId)

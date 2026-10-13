@@ -1,0 +1,9 @@
+AI Arena - Lite 0.4.148-beta
+
+Changes since 0.4.147-beta:
+
+- Keep every Cast pressure and voice selection readable with compact values, visible field labels, full-value tooltips, and role-specific accessibility names. Share picker construction while retaining existing saved options.
+- Keep newly rendered Cast edit, color, lock, and style controls disabled during arena work, and restore them when work finishes.
+- Bind Match Setup edits and color popups to their original session and live card. Reject events from replaced, detached, or previous-session controls; already accepted changes finish against their original session.
+- Keep invalid color drafts open with accessible inline feedback. Preserve attempted colors after unsuccessful saves, allow retry, and prevent duplicate choices during a pending save. Successfully saved changes close even if optional view refresh fails.
+- Keep missing-session and missing-role feedback within the original Match Setup session. Update status views independently so a presentation failure or session switch cannot replace current-session feedback.

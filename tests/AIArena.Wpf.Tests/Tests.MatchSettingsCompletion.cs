@@ -187,6 +187,7 @@ internal static partial class Program
         internal Func<string, Brush>? ResourceOverride;
         internal int LoadStatusAttempts, ArenaStatusAttempts;
         internal Action? AfterSave, AfterRefresh;
+        internal Action? AfterLoadStatus;
 
         internal MatchSettingFixture(bool evidenceFails = false)
         {
@@ -215,7 +216,7 @@ internal static partial class Program
                     if (RefreshFails) throw new IOException("private refresh sk-test-secret");
                     return Task.CompletedTask;
                 },
-                status => { LoadStatusAttempts++; if (LoadStatusFails) throw new IOException("private status"); Statuses.Add(status); },
+                status => { LoadStatusAttempts++; if (LoadStatusFails) throw new IOException("private status"); Statuses.Add(status); AfterLoadStatus?.Invoke(); },
                 status => { ArenaStatusAttempts++; if (ArenaStatusFails) throw new IOException("private status"); Statuses.Add(status); });
         }
 

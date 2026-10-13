@@ -31,6 +31,10 @@ Lock topic, global instruction, or cast fields that must survive regeneration. R
 
 These layers are intentionally distinct so experiments can change one variable at a time.
 
+Cast cards show compact Pressure and Voice selections with their full values in tooltips. Setup editing is temporarily disabled while arena work runs. Selecting a color opens an editor for that role: invalid colors and unsuccessful saves keep the draft open with feedback so you can correct or retry it.
+
+Changes and their feedback belong to the session where you started editing. Switching sessions or replacing a card retires its controls; a change already being saved finishes against its original session.
+
 ## Relationship Matrix
 
 Choose or edit a pattern, inspect the pressure graph, then apply it. Only active valid rules enter Arena prompts. Neutral, inactive, invalid, or out-of-cast targets are excluded and shown honestly in readiness.
