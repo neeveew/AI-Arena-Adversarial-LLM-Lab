@@ -466,6 +466,7 @@ public sealed class NarratorService : IDisposable
         var result = await completionExecutor.CompleteAsync(config, primaryPrompt.Messages, cancellationToken, publishText);
         result = ModelCompletionOutcomeClassifier.Normalize(result);
         if (result.Ok
+            || !ModelCompletionRecoveryScope.CanUseFallback(result)
             || result.FailureKind is ModelCompletionFailureKind.ContextLimitExceeded or ModelCompletionFailureKind.EmptyPublicContent
             || completionExecutor.RecoveryUsed
             || fallbackConfig is null)
