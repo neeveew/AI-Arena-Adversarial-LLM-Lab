@@ -182,6 +182,7 @@ internal static partial class Program
         internal bool ManageBusy;
         internal int SaveAttempts;
         internal Func<Task>? BeforeSaveAsync;
+        internal Func<Task>? BeforeOperationAsync;
         internal Exception? SaveFailure;
         internal Func<string, Brush>? ResourceOverride;
         internal int LoadStatusAttempts, ArenaStatusAttempts;
@@ -221,7 +222,7 @@ internal static partial class Program
         private async Task RunOperation(Func<Task> action)
         {
             if (ManageBusy) { Busy = true; Coordinator.UpdateBusyState(true); }
-            try { await action(); }
+            try { if (BeforeOperationAsync is not null) await BeforeOperationAsync(); await action(); }
             catch (Exception exception) { Errors.Add(exception); }
             finally { if (ManageBusy) { Busy = false; Coordinator.UpdateBusyState(false); } }
         }
@@ -241,17 +242,33 @@ internal static partial class Program
             {
                 case "voice":
                 case "pressure":
-                    var picker = (ComboBox)Call(kind == "voice" ? "CreateVoiceStylePicker" : "CreateAgentPressurePicker", "alpha", "default")!;
+                    var card = ShowMutationCard();
+                    var picker = CastControlDescendants<ComboBox>(card).Single(control =>
+                        System.Windows.Automation.AutomationProperties.GetName(control) == "Alpha " + kind);
                     var tag = kind == "voice" ? "scientific" : "assertive";
                     picker.SelectedItem = picker.Items.Cast<ComboBoxItem>().Single(item => Equals(item.Tag, tag));
                     break;
                 case "color": PumpDocumentImportTask((Task)Call("UpdateAccentColorAsync", Active, "alpha", "#123456")!); break;
                 case "text": PumpDocumentImportTask((Task)Call("UpdateMatchTextAsync", Active, "topic", "New test topic")!); break;
                 case "lock":
-                    Call("MatchLockChanged", new CheckBox { Tag = "alpha", IsChecked = true }, new RoutedEventArgs());
+                    CastControlDescendants<CheckBox>(ShowMutationCard()).Single().IsChecked = true;
                     break;
             }
             PumpDocumentImportTask(LastOperation);
+        }
+
+        private Border ShowMutationCard()
+        {
+            var card = Coordinator.CreateLockCard("alpha", "Alpha", "Test persona", Brushes.Black, Brushes.Cyan,
+                false, "default", "default");
+            owner.Content = card;
+            owner.Width = 600;
+            owner.Height = 400;
+            owner.ShowInTaskbar = false;
+            owner.Show();
+            owner.UpdateLayout();
+            PumpLifecycleUi();
+            return card;
         }
 
         public void Dispose()

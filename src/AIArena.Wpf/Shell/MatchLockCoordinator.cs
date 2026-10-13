@@ -35,6 +35,7 @@ internal sealed class MatchLockCoordinator
     private readonly List<ComboBox> pressureControls = [];
     private readonly List<Button> colorControls = [];
     private readonly List<Button> actionControls = [];
+    private readonly Dictionary<Control, MatchControlBinding> mutationControls = [];
     private Style? lockToggleStyle;
     private AccentColorPopupContext? activeColorPopup;
 
@@ -87,11 +88,44 @@ internal sealed class MatchLockCoordinator
     public void ClearControls()
     {
         CloseAccentColorPopup();
+        foreach (var control in mutationControls.Keys.ToArray()) control.Unloaded -= MatchMutationControl_Unloaded;
+        mutationControls.Clear();
         lockControls.Clear();
         voiceControls.Clear();
         pressureControls.Clear();
         colorControls.Clear();
         actionControls.Clear();
+    }
+
+    private void RegisterMatchMutationControl(Control control, string key)
+    {
+        if (activeSession() is not { } session) return;
+        mutationControls[control] = new MatchControlBinding(session, key);
+        control.Unloaded += MatchMutationControl_Unloaded;
+    }
+
+    private void MatchMutationControl_Unloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Control control) return;
+        mutationControls.Remove(control);
+        control.Unloaded -= MatchMutationControl_Unloaded;
+    }
+
+    private bool MatchMutationBindingIsCurrent(Control control, MatchControlBinding binding) =>
+        control.IsLoaded && PresentationSource.FromVisual(control) is not null
+        && mutationControls.TryGetValue(control, out var current) && ReferenceEquals(current, binding)
+        && SessionIsCurrent(binding.Session.Id);
+
+    private bool TryAdmitMatchMutation(Control control, out MatchControlBinding binding)
+    {
+        if (!isArenaBusy() && !isRenderingSnapshot() && mutationControls.TryGetValue(control, out var current)
+            && MatchMutationBindingIsCurrent(control, current))
+        {
+            binding = current;
+            return true;
+        }
+        binding = null!;
+        return false;
     }
 
     public void UpdateBusyState(bool busy)
@@ -147,6 +181,7 @@ internal sealed class MatchLockCoordinator
             VerticalAlignment = VerticalAlignment.Center,
             ToolTip = locked ? "Locked. Click to unlock." : "Unlocked. Click to lock."
         };
+        RegisterMatchMutationControl(lockBox, lockKey);
         lockBox.Checked += MatchLockChanged;
         lockBox.Unchecked += MatchLockChanged;
         lockControls.Add(lockBox);
@@ -305,6 +340,7 @@ internal sealed class MatchLockCoordinator
             ToolTip = tooltip
         };
         actionControls.Add(button);
+        if (tag is string key) RegisterMatchMutationControl(button, key);
         return button;
     }
 
@@ -400,6 +436,7 @@ internal sealed class MatchLockCoordinator
         ShellUiHelpers.SelectComboTag(picker, selectedTag);
         UpdateHelp();
         picker.SelectionChanged += (_, _) => UpdateHelp();
+        RegisterMatchMutationControl(picker, lockKey);
         return picker;
     }
 
@@ -408,7 +445,7 @@ internal sealed class MatchLockCoordinator
         var button = new Button
         {
             IsEnabled = !isArenaBusy(),
-            Tag = new AccentColorPayload(lockKey, AgentAccentService.NormalizeColor(accentColor), activeSession()?.Id ?? ""),
+            Tag = new AccentColorPayload(lockKey, AgentAccentService.NormalizeColor(accentColor)),
             Width = 32,
             MinWidth = 32,
             Height = 28,
@@ -431,6 +468,7 @@ internal sealed class MatchLockCoordinator
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
+        RegisterMatchMutationControl(button, lockKey);
         button.Click += AccentColorButton_Click;
         colorControls.Add(button);
         return button;
@@ -458,11 +496,9 @@ internal sealed class MatchLockCoordinator
 
     private Popup? OpenAccentColorPopup(Button button, AccentColorPayload payload)
     {
-        var session = activeSession();
-        if (session is null || isArenaBusy() || !button.IsEnabled || !button.IsLoaded || !colorControls.Contains(button)
-            || !string.Equals(session.Id, payload.SessionId, StringComparison.OrdinalIgnoreCase)) return null;
+        if (!button.IsEnabled || !TryAdmitMatchMutation(button, out var binding)) return null;
         CloseAccentColorPopup();
-        if (!SessionIsCurrent(session.Id) || isArenaBusy() || !button.IsLoaded || !colorControls.Contains(button)) return null;
+        if (!MatchMutationBindingIsCurrent(button, binding) || isArenaBusy()) return null;
         var popup = new Popup
         {
             PlacementTarget = button,
@@ -567,7 +603,7 @@ internal sealed class MatchLockCoordinator
         AutomationProperties.SetName(feedback, "Color change status");
         AutomationProperties.SetLiveSetting(feedback, AutomationLiveSetting.Polite);
         stack.Children.Add(feedback);
-        var context = new AccentColorPopupContext(session, payload.Key, button, popup, hexText, feedback);
+        var context = new AccentColorPopupContext(binding, button, popup, hexText, feedback);
         Task ApplyChoice(string value) => ApplyAccentColorChoiceAsync(context, value);
         foreach (var option in AgentAccentService.PresetOptions)
         {
@@ -688,7 +724,7 @@ internal sealed class MatchLockCoordinator
 
     private bool AccentColorPopupIsCurrent(AccentColorPopupContext context) =>
         ReferenceEquals(activeColorPopup, context) && context.Popup.IsOpen
-        && SessionIsCurrent(context.Session.Id) && colorControls.Contains(context.Anchor) && context.Anchor.IsLoaded;
+        && MatchMutationBindingIsCurrent(context.Anchor, context.Binding);
 
     private void SetAccentColorFeedback(AccentColorPopupContext context, string message, bool error = false)
     {
@@ -766,12 +802,13 @@ internal sealed class MatchLockCoordinator
 
     private async void VoiceStylePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        var session = activeSession();
-        if (isArenaBusy() || isRenderingSnapshot() || session is null || sender is not ComboBox picker || picker.Tag is not string key)
+        if (sender is not ComboBox picker || !TryAdmitMatchMutation(picker, out var binding))
         {
             return;
         }
 
+        var session = binding.Session;
+        var key = binding.Key;
         var voiceStyle = ShellUiHelpers.SelectedComboTag(picker, "default");
         await runArenaBusyAsync($"Updating {DisplayLockKey(key)} voice...", null, async () =>
         {
@@ -859,12 +896,13 @@ internal sealed class MatchLockCoordinator
 
     private async void AgentPressurePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        var session = activeSession();
-        if (isArenaBusy() || isRenderingSnapshot() || session is null || sender is not ComboBox picker || picker.Tag is not string key)
+        if (sender is not ComboBox picker || !TryAdmitMatchMutation(picker, out var binding))
         {
             return;
         }
 
+        var session = binding.Session;
+        var key = binding.Key;
         var pressure = ShellUiHelpers.SelectedComboTag(picker, "default");
         await runArenaBusyAsync($"Updating {DisplayLockKey(key)} pressure...", null, async () =>
         {
@@ -891,12 +929,13 @@ internal sealed class MatchLockCoordinator
 
     private async void MatchLockChanged(object sender, RoutedEventArgs e)
     {
-        var session = activeSession();
-        if (isArenaBusy() || session is null || sender is not CheckBox checkBox || checkBox.Tag is not string key)
+        if (sender is not CheckBox checkBox || !TryAdmitMatchMutation(checkBox, out var binding))
         {
             return;
         }
 
+        var session = binding.Session;
+        var key = binding.Key;
         var locked = checkBox.IsChecked == true;
         await runArenaBusyAsync($"Updating {key} lock...", null, async () =>
         {
@@ -912,13 +951,15 @@ internal sealed class MatchLockCoordinator
 
     private async void EditLockCardButton_Click(object sender, RoutedEventArgs e)
     {
-        var session = activeSession();
-        if (isArenaBusy() || session is null || sender is not Button button || button.Tag is not string key)
+        if (sender is not Button button || !TryAdmitMatchMutation(button, out var binding))
         {
             return;
         }
 
+        var session = binding.Session;
+        var key = binding.Key;
         var snapshot = await sessionStore.LoadSnapshotAsync(session.Id);
+        if (!MatchMutationBindingIsCurrent(button, binding) || isArenaBusy()) return;
         if (snapshot is null)
         {
             SetBothStatuses($"No snapshot found for session {session.Id}.");
@@ -1440,10 +1481,13 @@ internal sealed class MatchLockCoordinator
     }
 
     private sealed record RoleDetailPayload(string Title, string Persona);
-    private sealed record AccentColorPayload(string Key, string Color, string SessionId);
-    private sealed record AccentColorPopupContext(CoreSessionSummary Session, string Key, Button Anchor, Popup Popup,
+    private sealed record MatchControlBinding(CoreSessionSummary Session, string Key);
+    private sealed record AccentColorPayload(string Key, string Color);
+    private sealed record AccentColorPopupContext(MatchControlBinding Binding, Button Anchor, Popup Popup,
         TextBox HexInput, TextBlock Feedback)
     {
+        public CoreSessionSummary Session => Binding.Session;
+        public string Key => Binding.Key;
         public bool Saving { get; set; }
         public List<Button> Choices { get; } = [];
     }
