@@ -677,6 +677,8 @@ var tests = new List<(string Name, Action Test)>
     ("provider Models optimization avoids stable catalog layout work", ProviderModelsOptimizationAvoidsStableCatalogLayoutWork),
     ("provider Models optimization measures ten thousand stable rows", ProviderModelsOptimizationMeasuresTenThousandStableRows),
     ("provider Models inline editor routes wheel to its owning model list", ProviderModelsInlineEditorRoutesWheelToItsOwningModelList),
+    ("provider Models multiline tone remains compact", ProviderModelsMultilineToneRemainsCompact),
+    ("provider Models multiline tone scroll chains at its boundaries", ProviderModelsMultilineToneScrollChainsAtItsBoundaries),
     ("provider Models inline editor keeps context visible and edits server default", ProviderModelsInlineEditorKeepsContextVisibleAndEditsServerDefault),
     ("provider Models inline editor collapses without losing selection across polling", ProviderModelsInlineEditorCollapsesWithoutLosingSelectionAcrossPolling),
     ("provider Models inline editor keeps qualified selection and one shared editor", ProviderModelsInlineEditorKeepsQualifiedSelectionAndOneSharedEditor),

@@ -46,6 +46,8 @@
     <Thickness x:Key="Arena.Inset.Panel">12</Thickness>
     <Thickness x:Key="Arena.Inset.Section">14</Thickness>
     <Thickness x:Key="Arena.Inset.None">0</Thickness>
+    <sys:Double x:Key="Arena.Input.MultilineMinimumHeight">64</sys:Double>
+    <sys:Double x:Key="Arena.Input.MultilineMaximumHeight">144</sys:Double>
 
     <!-- Component insets measured from the established compact interface. -->
     <Thickness x:Key="Arena.Inset.RailAction">7,4</Thickness>

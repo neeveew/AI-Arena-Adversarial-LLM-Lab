@@ -302,6 +302,15 @@
         </Setter>
     </Style>
 
+    <Style x:Key="Arena.TextBox.MultilineCompact" TargetType="{x:Type TextBox}" BasedOn="{StaticResource Arena.TextBox}">
+        <Setter Property="MinHeight" Value="{DynamicResource Arena.Input.MultilineMinimumHeight}" />
+        <Setter Property="MaxHeight" Value="{DynamicResource Arena.Input.MultilineMaximumHeight}" />
+        <Setter Property="AcceptsReturn" Value="True" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="VerticalContentAlignment" Value="Top" />
+        <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
+    </Style>
+
     <Style x:Key="Arena.PasswordBox" TargetType="{x:Type PasswordBox}">
         <Setter Property="Background" Value="{DynamicResource InputBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
