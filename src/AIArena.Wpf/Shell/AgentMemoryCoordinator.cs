@@ -99,7 +99,7 @@ internal sealed class AgentMemoryCoordinator
 
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         actions.Children.Add(ActionButton("Refresh", (_, _) => refreshTranscript(), true, iconGlyph: "\uE72C"));
-        actions.Children.Add(ActionButton("Clear all", async (_, _) => await ClearAllAgentMemoryNotesAsync(), noteCount > 0, TranscriptActionKind.Danger, "\uE74D"));
+        actions.Children.Add(ActionButton("Clear all", async (_, _) => await ClearMemoryForSessionAsync(snapshot.SessionId), noteCount > 0, TranscriptActionKind.Danger, "\uE74D"));
         Grid.SetColumn(actions, 1);
         header.Children.Add(actions);
         panel.Children.Add(header);
@@ -110,7 +110,7 @@ internal sealed class AgentMemoryCoordinator
         };
         foreach (var agent in snapshot.Agents)
         {
-            grid.Children.Add(CreateAgentMemoryCard(agent));
+            grid.Children.Add(CreateAgentMemoryCard(snapshot.SessionId, agent));
         }
 
         if (snapshot.Agents.Count == 0)
@@ -132,87 +132,73 @@ internal sealed class AgentMemoryCoordinator
         };
     }
 
-    public async Task EditAgentMemoryNotesAsync(AgentState agent)
+    public Task EditAgentMemoryNotesAsync(AgentState agent) =>
+        EditMemoryForSessionAsync(activeSession()?.Id, agent);
+
+    private async Task EditMemoryForSessionAsync(string? sessionId, AgentState agent)
     {
+        if (!IsCurrentSession(sessionId)) return;
         var edited = TextEditDialog.Show(
-            owner,
-            theme(),
-            $"Edit {agent.Name} memory",
+            owner, theme(), $"Edit {agent.Name} memory",
             string.Join(Environment.NewLine, agent.PrivateNotes),
             "One memory note per line. Empty lines are ignored.");
-        if (edited is null)
-        {
-            return;
-        }
-
-        await SaveAgentMemoryNotesAsync(agent.Id, NormalizeMemoryNotes(edited));
+        if (edited is null) return;
+        await SaveMemoryForSessionAsync(sessionId, agent.Id, NormalizeMemoryNotes(edited));
     }
 
-    public async Task ClearAllAgentMemoryNotesAsync()
-    {
-        var confirm = ConfirmDialog.Show(
-            owner,
-            theme(),
-            "Clear Memory Notes",
-            "Clear private memory notes for every agent in this session?",
-            "Clear",
-            tone: ConfirmDialogTone.Danger);
-        if (!confirm)
-        {
-            return;
-        }
+    public Task ClearAllAgentMemoryNotesAsync() => ClearMemoryForSessionAsync(activeSession()?.Id);
 
+    private async Task ClearMemoryForSessionAsync(string? sessionId)
+    {
+        if (!IsCurrentSession(sessionId)) return;
+        var confirm = ConfirmDialog.Show(
+            owner, theme(), "Clear Memory Notes",
+            "Clear private memory notes for every agent in this session?",
+            "Clear", tone: ConfirmDialogTone.Danger);
+        if (!confirm || !IsCurrentSession(sessionId)) return;
         await runArenaBusyAsync("Clearing agent memory notes...", async () =>
         {
-            var session = activeSession();
-            if (session is null)
-            {
-                return;
-            }
-
-            var snapshot = await sessionStore.LoadSnapshotAsync(session.Id);
-            if (snapshot is null)
-            {
-                return;
-            }
-
-            foreach (var agent in snapshot.Engine.Agents)
-            {
-                agent.PrivateNotes.Clear();
-            }
-
-            await saveSnapshotWithFeedbackAsync(snapshot, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_agent_memory_notes_cleared", new { AllAgents = true });
-            await refreshActiveSessionAsync("Cleared agent memory notes.");
+            if (!IsCurrentSession(sessionId)) return;
+            var snapshot = await sessionStore.LoadSnapshotAsync(sessionId!);
+            if (snapshot is null || !IsCurrentSession(sessionId)) return;
+            foreach (var agent in snapshot.Engine.Agents) agent.PrivateNotes.Clear();
+            await saveSnapshotWithFeedbackAsync(snapshot, sessionId!);
+            await AppPostCommitEvidence.CompleteSavedChangeAsync(
+                eventLogStore, sessionId!, "native_agent_memory_notes_cleared", new { AllAgents = true },
+                "Cleared agent memory notes.", AppErrorContext.Arena,
+                () => IsCurrentSession(sessionId), refreshActiveSessionAsync, setArenaRunStatus);
         });
     }
 
-    public async Task SaveAgentMemoryNotesAsync(string agentId, IReadOnlyList<string> notes)
+    public Task SaveAgentMemoryNotesAsync(string agentId, IReadOnlyList<string> notes) =>
+        SaveMemoryForSessionAsync(activeSession()?.Id, agentId, notes);
+
+    private async Task SaveMemoryForSessionAsync(string? sessionId, string agentId, IReadOnlyList<string> notes)
     {
+        if (!IsCurrentSession(sessionId)) return;
         await runArenaBusyAsync($"Saving {agentId} memory notes...", async () =>
         {
-            var session = activeSession();
-            if (session is null)
-            {
-                return;
-            }
-
-            var snapshot = await sessionStore.LoadSnapshotAsync(session.Id);
+            if (!IsCurrentSession(sessionId)) return;
+            var snapshot = await sessionStore.LoadSnapshotAsync(sessionId!);
+            if (!IsCurrentSession(sessionId)) return;
             var agent = snapshot?.Engine.Agents.FirstOrDefault(item => item.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase));
             if (snapshot is null || agent is null)
             {
                 setArenaRunStatus($"Agent {agentId} not found.");
                 return;
             }
-
             agent.PrivateNotes.Clear();
             agent.PrivateNotes.AddRange(notes);
-
-            await saveSnapshotWithFeedbackAsync(snapshot, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_agent_memory_notes_saved", new { Agent = agentId, Count = notes.Count });
-            await refreshActiveSessionAsync($"Saved {displayStatusValue(agentId)} memory notes.");
+            await saveSnapshotWithFeedbackAsync(snapshot, sessionId!);
+            await AppPostCommitEvidence.CompleteSavedChangeAsync(
+                eventLogStore, sessionId!, "native_agent_memory_notes_saved", new { Agent = agentId, Count = notes.Count },
+                $"Saved {displayStatusValue(agentId)} memory notes.", AppErrorContext.Arena,
+                () => IsCurrentSession(sessionId), refreshActiveSessionAsync, setArenaRunStatus);
         });
     }
+
+    private bool IsCurrentSession(string? sessionId) => !string.IsNullOrWhiteSpace(sessionId)
+        && string.Equals(activeSession()?.Id, sessionId, StringComparison.OrdinalIgnoreCase);
 
     public static IReadOnlyList<string> NormalizeMemoryNotes(string text)
     {
@@ -225,7 +211,7 @@ internal sealed class AgentMemoryCoordinator
             .ToArray();
     }
 
-    private Border CreateAgentMemoryCard(AgentState agent)
+    private Border CreateAgentMemoryCard(string sessionId, AgentState agent)
     {
         var accent = accentForSpeaker(agent.Id);
         var stack = new StackPanel();
@@ -254,8 +240,8 @@ internal sealed class AgentMemoryCoordinator
         header.Children.Add(title);
 
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        actions.Children.Add(ActionButton("Edit", async (_, _) => await EditAgentMemoryNotesAsync(agent), true, TranscriptActionKind.Primary, "\uE70F"));
-        actions.Children.Add(ActionButton("Clear", async (_, _) => await SaveAgentMemoryNotesAsync(agent.Id, []), agent.PrivateNotes.Count > 0, TranscriptActionKind.Danger, "\uE74D"));
+        actions.Children.Add(ActionButton("Edit", async (_, _) => await EditMemoryForSessionAsync(sessionId, agent), true, TranscriptActionKind.Primary, "\uE70F"));
+        actions.Children.Add(ActionButton("Clear", async (_, _) => await SaveMemoryForSessionAsync(sessionId, agent.Id, []), agent.PrivateNotes.Count > 0, TranscriptActionKind.Danger, "\uE74D"));
         Grid.SetColumn(actions, 1);
         header.Children.Add(actions);
         stack.Children.Add(header);

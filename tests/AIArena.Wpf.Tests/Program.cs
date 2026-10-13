@@ -23,6 +23,8 @@ internal static partial class Program
 {
     private static int Main(string[] args)
     {
+if (args.Length == 2 && args[0] == "--memory-ownership-fixture") return RunMemoryOwnershipFixture(args[1]);
+
 if (args.Length == 2 && args[0].Equals("--native-services-window-smoke", StringComparison.Ordinal))
 {
     return RunNativeServicesWindowSmoke(args[1]);
@@ -282,6 +284,12 @@ var tests = new List<(string Name, Action Test)>
     ("role style catalog normalizes labels and chips", RoleStyleCatalogNormalizesLabelsAndChips),
     ("role style catalog formats voice adherence cues", RoleStyleCatalogFormatsVoiceAdherenceCues),
     ("agent memory coordinator normalizes notes", AgentMemoryCoordinatorNormalizesNotes),
+    ("memory ownership dialogs reject session replacement", MemoryOwnershipDialogsRejectSessionReplacement),
+    ("memory ownership queued actions reject session replacement", MemoryOwnershipQueuedActionsRejectSessionReplacement),
+    ("memory ownership stale buttons cannot open or mutate", MemoryOwnershipStaleButtonsCannotOpenOrMutate),
+    ("memory ownership healthy dialogs and cancel remain usable", MemoryOwnershipHealthyDialogsAndCancelRemainUsable),
+    ("memory ownership saved changes survive secondary faults", MemoryOwnershipSavedChangesSurviveSecondaryFaults),
+    ("memory ownership authoritative failure does not claim saved", MemoryOwnershipAuthoritativeFailureDoesNotClaimSaved),
     ("agent board coordinator formats statuses", AgentBoardCoordinatorFormatsStatuses),
     ("agent board coordinator disables mode buttons while busy", AgentBoardCoordinatorDisablesModeButtonsWhileBusy),
     ("agent runbook persists stable workflow and recovers interruptions", AgentRunbookPersistsStableWorkflowAndRecoversInterruptions),
