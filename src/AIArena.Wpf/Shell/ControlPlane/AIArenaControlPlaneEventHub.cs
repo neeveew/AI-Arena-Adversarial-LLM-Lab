@@ -1,3 +1,5 @@
+using AIArena.Wpf.Services;
+
 namespace AIArena.Wpf;
 
 internal sealed class AIArenaControlPlaneEventHub : IAIArenaControlEventSource
@@ -35,11 +37,7 @@ internal sealed class AIArenaControlPlaneEventHub : IAIArenaControlEventSource
 
         foreach (var subscriber in snapshot)
         {
-            try
-            {
-                subscriber(controlEvent);
-            }
-            catch (ObjectDisposedException)
+            if (ObserverNotification.TryPublish(subscriber, controlEvent) is ObjectDisposedException)
             {
                 Unsubscribe(subscriber);
             }

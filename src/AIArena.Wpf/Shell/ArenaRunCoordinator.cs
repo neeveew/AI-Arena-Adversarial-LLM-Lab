@@ -1,6 +1,7 @@
 using System.Windows.Controls;
 using AIArena.Core.Models;
 using AIArena.Core.Services;
+using AIArena.Wpf.Services;
 using AIArena.Wpf.Models;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 
@@ -98,11 +99,12 @@ internal sealed class ArenaRunCoordinator
         autoChatCompletion = completion;
         var token = autoChatCancellation.Token;
         var finalStatus = "Auto Chat running...";
-        setArenaBusy(true, "Auto Chat running...", true, autoChatButton);
-        RunLifecycle?.Invoke("started");
-
         try
         {
+            // Startup can partially update the shell before a callback fails; it still owns cleanup.
+            setArenaBusy(true, "Auto Chat running...", true, autoChatButton);
+            ObserverNotification.Publish(RunLifecycle, "started");
+            token.ThrowIfCancellationRequested();
             while (!token.IsCancellationRequested && activeSession() is { } session)
             {
                 await arenaOperationLock.WaitAsync(token);
@@ -169,14 +171,10 @@ internal sealed class ArenaRunCoordinator
     public void StopAutoChat()
     {
         var cancellation = autoChatCancellation;
-        if (cancellation is null)
+        if (cancellation is null || cancellation.IsCancellationRequested)
         {
             return;
         }
-
-        // Past the guard the loop is definitely being stopped, so this reports
-        // the transition rather than every press of a button that was a no-op.
-        RunLifecycle?.Invoke("stopped");
 
         try
         {
@@ -194,7 +192,10 @@ internal sealed class ArenaRunCoordinator
             return;
         }
 
-        setArenaRunStatus("Stopping Auto Chat...");
+        // Cancellation is authoritative before observers run, including observers that request Stop again.
+        ObserverNotification.Publish(RunLifecycle, "stopped");
+        if (ReferenceEquals(autoChatCancellation, cancellation))
+            ObserverNotification.Publish(setArenaRunStatus, "Stopping Auto Chat...");
     }
 
     public async Task StopAutoChatAsync()
@@ -216,7 +217,7 @@ internal sealed class ArenaRunCoordinator
         var session = activeSession();
         if (session is null)
         {
-            setLoadStatus("No active session.");
+            ObserverNotification.Publish(setLoadStatus, "No active session.");
             return false;
         }
 
@@ -234,7 +235,8 @@ internal sealed class ArenaRunCoordinator
                     speakNarratorMessage(result.Message!);
                     return Task.CompletedTask;
                 }, "voice narration could not be started", AppErrorContext.Arena);
-                SetBothStatuses(AppPostCommitEvidence.AppendWarning(presentation.Status, voiceWarning));
+                if (!string.IsNullOrWhiteSpace(voiceWarning))
+                    SetBothStatuses(AppPostCommitEvidence.AppendWarning(presentation.Status, voiceWarning));
             }
         }, true);
 
@@ -243,7 +245,7 @@ internal sealed class ArenaRunCoordinator
         // that as completed is how a blocked request came to look like a done one.
         if (ran)
         {
-            RunLifecycle?.Invoke("narration");
+            ObserverNotification.Publish(RunLifecycle, "narration");
         }
 
         return ran;
@@ -256,7 +258,7 @@ internal sealed class ArenaRunCoordinator
         var session = activeSession();
         if (session is null)
         {
-            setLoadStatus("No active session.");
+            ObserverNotification.Publish(setLoadStatus, "No active session.");
             return false;
         }
 
@@ -271,7 +273,7 @@ internal sealed class ArenaRunCoordinator
 
         if (ran)
         {
-            RunLifecycle?.Invoke("turn");
+            ObserverNotification.Publish(RunLifecycle, "turn");
         }
 
         return ran;
@@ -282,7 +284,7 @@ internal sealed class ArenaRunCoordinator
         var session = activeSession();
         if (session is null)
         {
-            setLoadStatus("No active session.");
+            ObserverNotification.Publish(setLoadStatus, "No active session.");
             return;
         }
 
@@ -400,7 +402,7 @@ internal sealed class ArenaRunCoordinator
 
     private void SetBothStatuses(string status)
     {
-        setArenaRunStatus(status);
-        setLoadStatus(status);
+        ObserverNotification.Publish(setArenaRunStatus, status);
+        ObserverNotification.Publish(setLoadStatus, status);
     }
 }
