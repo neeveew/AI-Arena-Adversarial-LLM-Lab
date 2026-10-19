@@ -97,6 +97,12 @@ internal static class ExperimentPersistenceOptimizationTests
         {
             startInfo.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
         }
+        // This is a steady-state allocation regression check, not a startup
+        // benchmark. Compile framework code consistently before warming it;
+        // quick-JIT/tier-promotion timing otherwise changes allocations inside
+        // this short sample on different runners. Only this probe is affected.
+        startInfo.Environment["DOTNET_TieredCompilation"] = "0";
+        startInfo.Environment["DOTNET_ReadyToRun"] = "0";
         startInfo.ArgumentList.Add("--experiment-run-load-probe");
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start the isolated experiment-run load probe.");
@@ -182,11 +188,14 @@ internal static class ExperimentPersistenceOptimizationTests
             stopwatch.Stop();
             var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
             Require(measured.Runs.Length == count - 2, "measured load changed valid artifact count");
-            Require(allocated < 34_000_000, $"1,000-artifact parallel load allocated {allocated} bytes");
             Console.WriteLine(
                 $"OPTIMIZED_RECEIPT experiment_run_load artifacts={expectedFileCount} valid={measured.Runs.Length} " +
                 $"elapsed_ms={stopwatch.Elapsed.TotalMilliseconds:F3} allocated_bytes={allocated} " +
-                $"file_reads={parallel.LastLoadMetrics.FilesRead} max_concurrent_decodes={parallel.LastLoadMetrics.MaximumConcurrentDecodes}");
+                $"file_reads={parallel.LastLoadMetrics.FilesRead} max_concurrent_decodes={parallel.LastLoadMetrics.MaximumConcurrentDecodes} " +
+                $"allocation_limit=34000000 runtime={Environment.Version} processors={Environment.ProcessorCount} " +
+                $"tiered_compilation={Environment.GetEnvironmentVariable("DOTNET_TieredCompilation") ?? "default"} " +
+                $"ready_to_run={Environment.GetEnvironmentVariable("DOTNET_ReadyToRun") ?? "default"}");
+            Require(allocated < 34_000_000, $"1,000-artifact parallel load allocated {allocated} bytes");
 
             using var cancelled = new CancellationTokenSource();
             cancelled.Cancel();
