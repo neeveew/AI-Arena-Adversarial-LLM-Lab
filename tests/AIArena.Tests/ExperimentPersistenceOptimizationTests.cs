@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using AIArena.Core.Models;
@@ -78,6 +79,62 @@ internal static class ExperimentPersistenceOptimizationTests
     }
 
     internal static void RunLoadingIsBoundedDeterministicAndCancellationSafe()
+    {
+        // GetTotalAllocatedBytes counts every thread in the process. Earlier
+        // provider/transport tests can leave background work and thread-pool
+        // state behind, so measure this async loader in a fresh process while
+        // retaining its allocation budget and all functional assertions.
+        var executable = Environment.ProcessPath
+            ?? throw new InvalidOperationException("The Core test executable path is unavailable.");
+        var startInfo = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            startInfo.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+        }
+        startInfo.ArgumentList.Add("--experiment-run-load-probe");
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start the isolated experiment-run load probe.");
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        try
+        {
+            Require(process.WaitForExit(60_000), "isolated experiment-run load probe timed out");
+            Console.Write(output.GetAwaiter().GetResult());
+            var diagnostic = error.GetAwaiter().GetResult();
+            Require(process.ExitCode == 0,
+                $"isolated experiment-run load probe failed (exit {process.ExitCode}): {diagnostic.Trim()}");
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5_000);
+            }
+        }
+    }
+
+    internal static int RunIsolatedRunLoadingProbe()
+    {
+        try
+        {
+            RunLoadingProbe();
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"{exception.GetType().Name}: {exception.Message}");
+            return 1;
+        }
+    }
+
+    private static void RunLoadingProbe()
     {
         var root = TemporaryRoot();
         try

@@ -26,6 +26,11 @@ if (args.Length > 0 && args[0].Equals("--abandon-experiment-definition", StringC
     return Environment.ExitCode;
 }
 
+if (args.Length == 1 && args[0].Equals("--experiment-run-load-probe", StringComparison.Ordinal))
+{
+    return ExperimentPersistenceOptimizationTests.RunIsolatedRunLoadingProbe();
+}
+
 var tests = new List<(string Name, Action Test)>
 {
     ("provider output preserves public whitespace across transports", ProviderReasoningOutcomeTests.PreservesPublicWhitespaceAcrossTransports),
