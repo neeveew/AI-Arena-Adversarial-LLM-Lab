@@ -25,8 +25,10 @@ product version and README download link on the latest published release while
 changes accumulate in `packaging/changes/UNRELEASED.md`. Do not create a new
 version or installer for every small change. When the repository owner decides
 the batch is substantial enough to publish, promote the verified unreleased
-bullets into `packaging/changes/<version>.txt`, bump every release surface, then
-build, tag, and publish that version as one operation.
+bullets into `packaging/changes/<version>.txt`, bump the build version surfaces,
+and build the release. The publisher tags and publishes the approved build,
+then advances the README links after checking public availability. If a build
+is held as a draft, the README stays on the previous public release.
 
 Also add `packaging/changes/<version>.txt`, refresh the dependency index with `scripts/dependency-index.ps1`, then build the installer:
 
@@ -38,9 +40,11 @@ Installer distributions are always self-contained and include the required .NET 
 
 Test-only changes and behavior-identical internal refactors do not need an installer.
 
-Publishing is part of the release, not a follow-up. A version bump reaches main with the README download link already pointing at `v<version>`, so the tag and GitHub release have to exist or the repository front page links to nothing. `wpf-release-sanity.ps1` now checks that the README advertises the version being built, and that the payload's recorded source commit still matches the checkout - an installer built before a later `src/` commit is refused rather than shipped under a tag whose tree it was never built from. The build stamps `Source commit:` and `Source tree (src):` into `release-manifest.txt` for that check. If app source lands after the build, bump the version and rebuild; the build scripts deliberately refuse to overwrite an existing versioned distribution.
+Keep the README download and release-notes links on the last published release when bumping the source version. A draft is not publicly downloadable, even when the owner's GitHub credentials can see it. The publisher updates the README only after publishing the release with its installer and verifying public access using `scripts/check-published-release.ps1`.
 
-A scheduled `Build and test` workflow job fails when main declares a version that has no published release.
+`wpf-release-sanity.ps1` checks the README link's format and matching release notes independently of the build version. It retains the payload source-identity checks: the build stamps `Source commit:` and `Source tree (src):` into `release-manifest.txt`, and an installer built before a later `src/` commit is refused. If app source lands after the build, bump the version and rebuild; the build scripts deliberately refuse to overwrite an existing versioned distribution.
+
+The `Build and test` workflow checks the advertised release and installer on every run, including daily. It fails for drafts, missing installers, or broken public links; a newer source version alone is not a publication failure.
 
 ## Verification
 

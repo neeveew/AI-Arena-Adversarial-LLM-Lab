@@ -519,26 +519,15 @@ foreach ($requiredGuideSection in @(
     }
 }
 
-# The README download link is the front door. It is edited by hand during the
-# version bump, so it can name a version the release never produced, and readers
-# land on a tag that does not exist.
+# The public download stays on the last published release while a newer build
+# is prepared. CI checks its public availability independently of this build.
 $readmeText = Get-Content -LiteralPath $readmeFile -Raw
 if ($readmeText -notmatch ('(?m)^# ' + [regex]::Escape($productDisplayName) + '\r?$') `
     -or $readmeText -notmatch 'docs/assets/ai-arena-lite-emblem\.png') {
     throw "README does not expose the current Lite product name and emblem masthead."
 }
-$readmeDownload = [regex]::Match($readmeText, '\[Download\s+(?<label>[^\]]+)\]\(\s*(?<url>[^)\s]+)\s*\)')
-if (-not $readmeDownload.Success) {
-    throw "README no longer advertises a download link; the release version cannot be checked."
-}
-$readmeLabel = $readmeDownload.Groups['label'].Value.Trim()
-if ($readmeLabel -ne $Version) {
-    throw "README advertises download '$readmeLabel' but this release is $Version."
-}
-$expectedReleaseUrl = "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v$Version"
-if ($readmeDownload.Groups['url'].Value.Trim() -ne $expectedReleaseUrl) {
-    throw "README download link does not point at $expectedReleaseUrl."
-}
+. (Join-Path $Root 'scripts/check-published-release.ps1') -Root $Root
+$null = Get-AIArenaPublicDownload -RepositoryRoot $Root
 
 $manifestText = Get-Content -LiteralPath $releaseManifest -Raw
 $releaseChecksumsText = Get-Content -LiteralPath $releaseChecksums -Raw
