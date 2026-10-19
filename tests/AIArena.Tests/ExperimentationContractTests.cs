@@ -108,6 +108,31 @@ internal static class ExperimentationContractTests
         var qa = Qa() with { Artifacts = [new("artifact:x", "log", "../x.log", HashA, null)] };
         Require(ArenaContractCodec.Validate(qa).Issues.Any(issue => issue.Code == "privacy.relative_path"), "path traversal was accepted");
         Require(ArenaContractPrivacyRules.IsSafeRelativePath("artifacts/qa/run.json"), "safe relative path was rejected");
+
+        foreach (var absolutePath in new[]
+        {
+            @"C:\Private\trace.txt", "C:/Private/trace.txt",
+            @"\\server\share\trace.txt", @"\\?\C:\Private\trace.txt",
+            "/private/trace.txt", "saved at /private/trace.txt",
+            "file:///C:/Private/trace.txt", "FILE://host/share"
+        })
+        {
+            var json = new JsonObject { ["value"] = absolutePath }.ToJsonString();
+            Require(ArenaContractPrivacyRules.InspectJson(json).Any(issue => issue.Code == "privacy.absolute_path"),
+                "separator precheck bypassed a recognized absolute path");
+        }
+        Require(ArenaContractPrivacyRules.InspectJson("""{"value":"\u002Fprivate\u002Ftrace.txt"}""")
+                .Any(issue => issue.Code == "privacy.absolute_path"),
+            "JSON-escaped path separators bypassed the privacy check");
+        Require(ArenaContractPrivacyRules.InspectJson("""{"name":"one","\u006Eame":"two"}""")
+                .Any(issue => issue.Code == "json.duplicate_member"),
+            "reused decoded property names missed an escaped duplicate member");
+        foreach (var safeValue in new[] { "run:00042", HashA, "artifacts/qa/run.json", "https://example.com/help" })
+        {
+            var json = new JsonObject { ["value"] = safeValue }.ToJsonString();
+            Require(ArenaContractPrivacyRules.InspectJson(json).IsEmpty,
+                "safe identifier, hash, relative path, or web URL was rejected");
+        }
     }
 
     internal static void PersistsDeterministicExperimentRunsAndNormalizesRestart()

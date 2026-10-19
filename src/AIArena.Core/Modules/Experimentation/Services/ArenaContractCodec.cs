@@ -115,15 +115,18 @@ public static partial class ArenaContractPrivacyRules
             var propertyNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var property in element.EnumerateObject())
             {
-                var propertyPath = $"{path}.{property.Name}";
-                if (!propertyNames.Add(property.Name))
+                // JsonProperty.Name decodes a new string on each access.
+                // Reuse it for the path and both privacy checks.
+                var propertyName = property.Name;
+                var propertyPath = $"{path}.{propertyName}";
+                if (!propertyNames.Add(propertyName))
                 {
                     issues.Add(new ArenaContractValidationIssue(
                         "json.duplicate_member",
                         $"{path}.*",
                         "Duplicate JSON members are ambiguous and prohibited."));
                 }
-                if (ForbiddenContentProperties.Contains(property.Name))
+                if (ForbiddenContentProperties.Contains(propertyName))
                 {
                     issues.Add(new ArenaContractValidationIssue("privacy.source_content", propertyPath, SourceContentRule));
                 }
@@ -147,7 +150,11 @@ public static partial class ArenaContractPrivacyRules
                 issues.Add(new ArenaContractValidationIssue("privacy.secret", path, SecretRule));
             }
 
-            if (AbsolutePathRegex().IsMatch(value) || value.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+            // Every recognized absolute path (including file://) contains a
+            // separator. Avoid renting a shared regex runner for IDs/hashes;
+            // parallel artifact loads otherwise allocate runners on contention.
+            if ((value.Contains('/') || value.Contains('\\'))
+                && (AbsolutePathRegex().IsMatch(value) || value.StartsWith("file://", StringComparison.OrdinalIgnoreCase)))
             {
                 issues.Add(new ArenaContractValidationIssue("privacy.absolute_path", path, "Absolute filesystem paths are prohibited."));
             }
