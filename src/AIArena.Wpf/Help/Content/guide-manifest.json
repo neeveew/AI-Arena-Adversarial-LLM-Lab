@@ -1,7 +1,7 @@
 {
   "schemaVersion": "ai_arena.help_manifest.v1",
   "guideVersion": "0.4.151-beta",
-  "reviewedUtc": "2026-10-22",
+  "reviewedUtc": "2026-10-22T00:00:00Z",
   "journeys": [
     {
       "id": "connect-provider", "title": "Connect a provider", "order": 10, "iconGlyph": "\uE968",
