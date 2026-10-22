@@ -1,0 +1,9 @@
+AI Arena - Lite 0.4.151-beta
+
+Changes since 0.4.150-beta:
+
+- Keep Live Agents controls attached to the session that displayed them. Retired buttons and queued Pause, Resume, and Solo actions can no longer affect another session after switching.
+- Keep Solo from muting the remaining cast if its selected agent has been removed. Preserve normal control reuse while updating the same session.
+- Keep saved agent changes successful when optional activity logging, refresh, or feedback fails. Bound optional log waits using the shared completion policy and keep feedback with its originating session.
+- Reduce temporary memory allocations while validating saved experiment artifacts, retaining the existing privacy, duplicate-member, and canonical-format checks.
+- Keep public download links on the latest published release while newer builds are being prepared.
