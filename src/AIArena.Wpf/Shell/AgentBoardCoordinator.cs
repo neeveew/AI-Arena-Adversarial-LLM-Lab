@@ -32,6 +32,7 @@ internal sealed class AgentBoardCoordinator
     private readonly Func<bool> animationsEnabled;
     private readonly Dictionary<string, AgentCardView> agentCards = new(StringComparer.OrdinalIgnoreCase);
     private NarratorCardView? narratorCard;
+    private string? renderedSessionId;
     private bool participantActionsReady;
     private string participantReadinessMessage = "Complete provider, model, and cast setup before running this model.";
     private bool narratorActionsReady;
@@ -88,6 +89,11 @@ internal sealed class AgentBoardCoordinator
 
     public void Populate(ArenaViewSnapshot snapshot, string? currentAgentId)
     {
+        if (!string.Equals(renderedSessionId, snapshot.SessionId, StringComparison.OrdinalIgnoreCase))
+        {
+            Clear();
+        }
+        renderedSessionId = snapshot.SessionId;
         var readiness = ArenaOperationCoordinator.EvaluateReadiness(snapshot);
         participantActionsReady = readiness.CanRun;
         participantReadinessMessage = readiness.Message;
@@ -112,7 +118,7 @@ internal sealed class AgentBoardCoordinator
             desiredIds.Add(agent.Id);
             if (!agentCards.TryGetValue(agent.Id, out var view))
             {
-                view = CreateAgentCardView(agent.Id);
+                view = CreateAgentCardView(snapshot.SessionId, agent.Id);
                 agentCards[agent.Id] = view;
                 DiagnosticCardCreations++;
             }
@@ -129,7 +135,7 @@ internal sealed class AgentBoardCoordinator
             agentCards.Remove(staleId);
         }
 
-        narratorCard ??= CreateNarratorCardView();
+        narratorCard ??= CreateNarratorCardView(snapshot.SessionId);
         if (narratorCard.Card.Parent is null)
         {
             DiagnosticCardCreations++;
@@ -189,6 +195,7 @@ internal sealed class AgentBoardCoordinator
         agentItems.Children.Clear();
         agentCards.Clear();
         narratorCard = null;
+        renderedSessionId = null;
     }
 
     private Border CreateAgentStatusCard(string title, string status, Brush accent)
@@ -241,9 +248,12 @@ internal sealed class AgentBoardCoordinator
         return card;
     }
 
-    private AgentCardView CreateAgentCardView(string agentId)
+    private AgentCardView CreateAgentCardView(string sessionId, string agentId)
     {
         AgentCardView? view = null;
+        Task ChangeModeAsync(AgentModeChange change) => IsCurrentAgentCard(sessionId, view)
+            ? ChangeAgentModeAsync(sessionId, agentId, change)
+            : Task.CompletedTask;
         var title = new TextBlock
         {
             FontWeight = FontWeights.SemiBold,
@@ -274,6 +284,7 @@ internal sealed class AgentBoardCoordinator
         };
         primaryButton.Click += async (_, _) =>
         {
+            if (!IsCurrentAgentCard(sessionId, view)) return;
             var current = view?.CurrentAgent;
             if (current is null)
             {
@@ -281,7 +292,7 @@ internal sealed class AgentBoardCoordinator
             }
             if (view!.IsPaused)
             {
-                await SetAgentMuteAsync(view.AgentId, mute: false);
+                await ChangeModeAsync(AgentModeChange.Resume);
             }
             else
             {
@@ -310,11 +321,11 @@ internal sealed class AgentBoardCoordinator
         var soloItem = CreateAgentMenuItem("Solo agent", "Solo agent", "Mute other agents and keep this agent active.");
         var sourceSeparator = new Separator();
         var sourcesItem = CreateAgentMenuItem("Internet sources", "Show internet sources", "Shows this agent's latest internet sources.");
-        pauseItem.Click += async (_, _) => await SetAgentMuteAsync(view!.AgentId, mute: true);
-        soloItem.Click += async (_, _) => await SoloAgentAsync(view!.AgentId);
+        pauseItem.Click += async (_, _) => await ChangeModeAsync(AgentModeChange.Pause);
+        soloItem.Click += async (_, _) => await ChangeModeAsync(AgentModeChange.Solo);
         sourcesItem.Click += (_, _) =>
         {
-            if (view?.CurrentAgent?.InternetSources is { Sources.Count: > 0 } sources)
+            if (IsCurrentAgentCard(sessionId, view) && view?.CurrentAgent?.InternetSources is { Sources.Count: > 0 } sources)
             {
                 AgentInternetSourcesPresenter.ShowSourcesPopup(overflowButton, sources, resourceBrush, blendBrush);
             }
@@ -327,6 +338,7 @@ internal sealed class AgentBoardCoordinator
         overflowButton.Click += (_, e) =>
         {
             e.Handled = true;
+            if (!IsCurrentAgentCard(sessionId, view)) return;
             menu.PlacementTarget = overflowButton;
             menu.IsOpen = true;
         };
@@ -518,17 +530,26 @@ internal sealed class AgentBoardCoordinator
         AutomationProperties.SetHelpText(button, helpText);
     }
 
-    private async Task SetAgentMuteAsync(string agentId, bool mute)
-    {
-        await runArenaBusyAsync(mute ? $"Muting {agentId}..." : $"Activating {agentId}...", null, async () =>
-        {
-            var session = activeSession();
-            if (session is null)
-            {
-                return;
-            }
+    private bool IsCurrentSession(string sessionId) => !string.IsNullOrWhiteSpace(sessionId)
+        && string.Equals(activeSession()?.Id, sessionId, StringComparison.OrdinalIgnoreCase);
 
-            var snapshot = await sessionStore.LoadSnapshotAsync(session.Id);
+    private bool IsCurrentAgentCard(string sessionId, AgentCardView? view) => view is not null
+        && IsCurrentSession(sessionId) && agentCards.TryGetValue(view.AgentId, out var current)
+        && ReferenceEquals(current, view);
+
+    private enum AgentModeChange { Pause, Resume, Solo }
+
+    private async Task ChangeAgentModeAsync(string sessionId, string agentId, AgentModeChange change)
+    {
+        if (!IsCurrentSession(sessionId)) return;
+        var solo = change == AgentModeChange.Solo;
+        var progress = solo ? $"Soloing {agentId}..."
+            : change == AgentModeChange.Pause ? $"Muting {agentId}..." : $"Activating {agentId}...";
+        await runArenaBusyAsync(progress, null, async () =>
+        {
+            if (!IsCurrentSession(sessionId)) return;
+            var snapshot = await sessionStore.LoadSnapshotAsync(sessionId);
+            if (!IsCurrentSession(sessionId)) return;
             var agent = snapshot?.Engine.Agents.FirstOrDefault(item => item.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase));
             if (snapshot is null || agent is null)
             {
@@ -536,52 +557,33 @@ internal sealed class AgentBoardCoordinator
                 return;
             }
 
-            agent.Active = !mute;
-            if (!agent.Active)
+            if (solo)
             {
-                agent.Status = "muted";
+                foreach (var participant in snapshot.Engine.Agents)
+                {
+                    participant.Active = participant.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase);
+                    participant.Status = participant.Active ? "waiting" : "muted";
+                }
             }
-            else if (agent.Status.Equals("muted", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(agent.Status))
+            else
             {
-                agent.Status = "waiting";
+                agent.Active = change == AgentModeChange.Resume;
+                if (!agent.Active) agent.Status = "muted";
+                else if (agent.Status.Equals("muted", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(agent.Status))
+                    agent.Status = "waiting";
             }
 
-            await saveSnapshotWithFeedbackAsync(snapshot, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_agent_active_changed", new { Agent = agentId, Active = agent.Active });
-            await refreshActiveSessionAsync(agent.Active ? $"{displayStatusValue(agentId)} activated." : $"{displayStatusValue(agentId)} muted.");
+            await saveSnapshotWithFeedbackAsync(snapshot, sessionId);
+            object payload = solo ? new { Agent = agentId } : new { Agent = agentId, Active = agent.Active };
+            var outcome = solo ? $"{displayStatusValue(agentId)} solo enabled."
+                : agent.Active ? $"{displayStatusValue(agentId)} activated." : $"{displayStatusValue(agentId)} muted.";
+            await AppPostCommitEvidence.CompleteSavedChangeAsync(
+                eventLogStore, sessionId, solo ? "native_agent_solo_enabled" : "native_agent_active_changed", payload,
+                outcome, AppErrorContext.Arena, () => IsCurrentSession(sessionId), refreshActiveSessionAsync, setArenaRunStatus);
         }, true);
     }
 
-    private async Task SoloAgentAsync(string agentId)
-    {
-        await runArenaBusyAsync($"Soloing {agentId}...", null, async () =>
-        {
-            var session = activeSession();
-            if (session is null)
-            {
-                return;
-            }
-
-            var snapshot = await sessionStore.LoadSnapshotAsync(session.Id);
-            if (snapshot is null)
-            {
-                return;
-            }
-
-            foreach (var agent in snapshot.Engine.Agents)
-            {
-                var selected = agent.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase);
-                agent.Active = selected;
-                agent.Status = selected ? "waiting" : "muted";
-            }
-
-            await saveSnapshotWithFeedbackAsync(snapshot, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_agent_solo_enabled", new { Agent = agentId });
-            await refreshActiveSessionAsync($"{displayStatusValue(agentId)} solo enabled.");
-        }, true);
-    }
-
-    private NarratorCardView CreateNarratorCardView()
+    private NarratorCardView CreateNarratorCardView(string sessionId)
     {
         var playButton = new Button
         {
@@ -594,7 +596,11 @@ internal sealed class AgentBoardCoordinator
             Margin = new Thickness(4, 0, 0, 0),
             FontSize = 13
         };
-        playButton.Click += narrateNowHandler;
+        playButton.Click += (sender, args) =>
+        {
+            if (IsCurrentSession(sessionId) && ReferenceEquals(narratorCard?.PlayButton, playButton))
+                narrateNowHandler(sender, args);
+        };
         var card = new Border
         {
             BorderThickness = new Thickness(1),

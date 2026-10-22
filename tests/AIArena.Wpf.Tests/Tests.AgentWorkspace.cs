@@ -249,7 +249,7 @@ static void AgentBoardCoordinatorDisablesModeButtonsWhileBusy()
                 new SessionStore(root),
                 new EventLogStore(root),
                 panel,
-                () => null,
+                () => new AIArena.Core.Models.SessionSummary("session", "snapshot.json", true, 0, 0, 0, DateTimeOffset.UtcNow),
                 () => false,
                 () => autoChatRunning,
                 testBrush,
